@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Bluesky Post Screenshots</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <main>
+    <header class="page-header">
+      <h1>Bluesky Post Screenshots</h1>
+      <p>
+        Paste one or more Bluesky post links (or <code>at://</code> URIs), one per line,
+        and generate a shareable image for each. Posts from accounts that have enabled
+        <em>"Discourage apps from showing my account to logged-out users"</em> are skipped
+        with an explanation instead of being screenshotted.
+      </p>
+    </header>
+
+    <form id="post-form" class="post-form">
+      <label for="post-urls">Post links</label>
+      <textarea
+        id="post-urls"
+        rows="6"
+        placeholder="https://bsky.app/profile/bsky.app/post/3l7olnfrxsr2b&#10;https://bsky.app/profile/jay.bsky.team/post/..."
+      ></textarea>
+
+      <background-picker id="bg-picker"></background-picker>
+
+      <button type="submit" id="generate-btn">Generate screenshots</button>
+    </form>
+
+    <section id="results" class="results" aria-live="polite"></section>
+  </main>
+
+  <script type="module" src="/js/main.js"></script>
+</body>
+</html>

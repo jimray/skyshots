@@ -1,4 +1,5 @@
-import { parsePostReference, fetchPosts, isLoggedOutRestricted, PostInputError } from "./atproto.js";
+import { parsePostReference, fetchPosts, restrictionFor, PostInputError } from "./atproto.js";
+import { BACKGROUND_PRESETS } from "./render-card.js";
 import "./components/post-result-card.js";
 import "./components/background-picker.js";
 
@@ -8,7 +9,7 @@ const results = document.getElementById("results");
 const generateBtn = document.getElementById("generate-btn");
 const bgPicker = document.getElementById("bg-picker");
 
-let currentBackground = { backgroundId: "sunset", customBackgroundImage: null };
+let currentBackground = { backgroundId: BACKGROUND_PRESETS[0].id, customBackgroundImage: null };
 
 bgPicker.addEventListener("bg-change", (e) => {
   currentBackground = e.detail;
@@ -65,12 +66,9 @@ form.addEventListener("submit", async (e) => {
         cards[i].setError(lines[i], "Post not found. It may have been deleted, or the link/URI is incorrect.");
         continue;
       }
-      if (isLoggedOutRestricted(result.post)) {
-        cards[i].setRestricted(lines[i], result.post);
-        continue;
-      }
+      const restriction = restrictionFor(result.post, result.hiddenFromRecommendations);
       cards[i].primeBackground(currentBackground.backgroundId, currentBackground.customBackgroundImage);
-      cards[i].setPost(lines[i], result.post).catch((err) => {
+      cards[i].setPost(lines[i], result.post, restriction).catch((err) => {
         cards[i].setError(lines[i], err.message);
       });
     }

@@ -1,11 +1,12 @@
 {
   "name": "bluesky-post-screenshots",
   "version": "1.0.0",
-  "description": "Generate shareable image screenshots of Bluesky posts, respecting each author's logged-out visibility setting.",
+  "description": "Generate shareable image screenshots of Bluesky posts, respecting each author's content visibility opt-outs.",
   "type": "module",
   "private": true,
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test \"test/**/*.test.js\""
   },
   "engines": {
     "node": ">=18"

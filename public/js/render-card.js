@@ -1,4 +1,6 @@
 import { proxiedImageUrl } from "./atproto.js";
+import { drawBlueskyLogo, blueskyLogoWidth } from "./bluesky-logo.js";
+import { drawIcon } from "./bsky-icons.js";
 
 const BRAND_BLUE = "#1185fe";
 const TEXT_DARK = "#0f1419";
@@ -7,14 +9,13 @@ const BORDER = "#e1e8ed";
 
 export const BACKGROUND_PRESETS = [
   {
-    id: "sunset",
-    label: "Sunset",
-    swatch: "linear-gradient(135deg,#ff9966,#ff5e62,#a855f7)",
+    id: "sky",
+    label: "Bluesky",
+    swatch: "linear-gradient(135deg,#8ec5ff,#1185fe)",
     paint(ctx, w, h) {
       const g = ctx.createLinearGradient(0, 0, w, h);
-      g.addColorStop(0, "#ffb347");
-      g.addColorStop(0.5, "#ff5e62");
-      g.addColorStop(1, "#8b5cf6");
+      g.addColorStop(0, "#a7d4ff");
+      g.addColorStop(1, "#1185fe");
       return g;
     },
   },
@@ -53,17 +54,6 @@ export const BACKGROUND_PRESETS = [
     },
   },
   {
-    id: "sky",
-    label: "Bluesky",
-    swatch: "linear-gradient(135deg,#8ec5ff,#1185fe)",
-    paint(ctx, w, h) {
-      const g = ctx.createLinearGradient(0, 0, w, h);
-      g.addColorStop(0, "#a7d4ff");
-      g.addColorStop(1, "#1185fe");
-      return g;
-    },
-  },
-  {
     id: "paper",
     label: "Soft Gray",
     swatch: "linear-gradient(135deg,#f5f7fa,#c3cfe2)",
@@ -76,14 +66,60 @@ export const BACKGROUND_PRESETS = [
   },
 ];
 
-const CANVAS_WIDTH = 1200;
-const OUTER_PAD = 72;
+export const CANVAS_WIDTH = 1200;
+export const OUTER_PAD = 72;
 const CARD_PAD = 48;
-const CARD_WIDTH = CANVAS_WIDTH - OUTER_PAD * 2;
+export const CARD_WIDTH = CANVAS_WIDTH - OUTER_PAD * 2;
 const CONTENT_WIDTH = CARD_WIDTH - CARD_PAD * 2;
 const AVATAR_SIZE = 64;
 const BODY_FONT_SIZE = 30;
 const BODY_LINE_HEIGHT = BODY_FONT_SIZE * 1.42;
+
+/**
+ * Output sizes offered for every post. "original" grows to fit the content;
+ * the others are fixed frames the card is fitted into.
+ */
+export const SIZE_PRESETS = [
+  { id: "original", label: "Original" },
+  { id: "square", label: "Square", width: 1200, height: 1200 },
+];
+
+/**
+ * Works out the canvas dimensions and where the card sits inside them.
+ *
+ * The card is always drawn at its natural CARD_WIDTH x cardHeight; the caller
+ * applies `scale` and `x`/`y` as a canvas transform, so the card-drawing code
+ * never needs to know the output size.
+ *
+ * A fixed-size frame scales the card down until it fits inside the padding,
+ * then centers it. It never scales the card up: a card small enough to fit is
+ * left at 1:1, which for the square lands it at the same x as "original".
+ *
+ * @param {number} cardHeight  Natural height of the card, in pixels.
+ * @param {object} size        A SIZE_PRESETS entry.
+ * @returns {{width: number, height: number, scale: number, x: number, y: number}}
+ */
+export function fitCardTransform(cardHeight, size) {
+  if (!size?.width || !size?.height) {
+    return {
+      width: CANVAS_WIDTH,
+      height: Math.round(cardHeight + OUTER_PAD * 2),
+      scale: 1,
+      x: OUTER_PAD,
+      y: OUTER_PAD,
+    };
+  }
+
+  const { width, height } = size;
+  const scale = Math.min(1, (width - OUTER_PAD * 2) / CARD_WIDTH, (height - OUTER_PAD * 2) / cardHeight);
+  return {
+    width,
+    height,
+    scale,
+    x: (width - CARD_WIDTH * scale) / 2,
+    y: (height - cardHeight * scale) / 2,
+  };
+}
 
 function roundRectPath(ctx, x, y, w, h, r) {
   const radius = Math.min(r, w / 2, h / 2);
@@ -218,81 +254,33 @@ function formatTimestamp(iso) {
   return `${time} · ${day}`;
 }
 
-// --- Icons (drawn as paths so no external asset/font dependency exists) ---
-
-function drawReplyIcon(ctx, cx, cy, size) {
-  const w = size, h = size * 0.8;
-  ctx.strokeStyle = TEXT_GRAY;
-  ctx.lineWidth = 2.2;
-  ctx.lineJoin = "round";
-  roundRectPath(ctx, cx - w / 2, cy - h / 2, w, h, 5);
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(cx - w / 4, cy + h / 2 - 1);
-  ctx.lineTo(cx - w / 2 + 4, cy + h / 2 + size * 0.28);
-  ctx.lineTo(cx - w / 4 + 8, cy + h / 2 - 1);
-  ctx.closePath();
-  ctx.fillStyle = TEXT_GRAY;
-  ctx.fill();
-}
-
-function drawRepostIcon(ctx, cx, cy, size) {
-  const r = size / 2;
-  ctx.strokeStyle = TEXT_GRAY;
-  ctx.lineWidth = 2.2;
-  ctx.beginPath();
-  ctx.arc(cx, cy, r, Math.PI * 1.1, Math.PI * 1.9);
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.arc(cx, cy, r, Math.PI * 0.1, Math.PI * 0.9);
-  ctx.stroke();
-  const drawArrow = (angle) => {
-    const ax = cx + r * Math.cos(angle);
-    const ay = cy + r * Math.sin(angle);
-    ctx.save();
-    ctx.translate(ax, ay);
-    ctx.rotate(angle + Math.PI / 2);
-    ctx.beginPath();
-    ctx.moveTo(-4, -4);
-    ctx.lineTo(4, 0);
-    ctx.lineTo(-4, 4);
-    ctx.closePath();
-    ctx.fillStyle = TEXT_GRAY;
-    ctx.fill();
-    ctx.restore();
-  };
-  drawArrow(Math.PI * 1.9);
-  drawArrow(Math.PI * 0.9);
-}
-
-function drawHeartIcon(ctx, cx, cy, size) {
-  const s = size / 24;
-  ctx.save();
-  ctx.translate(cx - 12 * s, cy - 11 * s);
-  ctx.beginPath();
-  ctx.moveTo(12 * s, 21 * s);
-  ctx.bezierCurveTo(4 * s, 14.5 * s, 1 * s, 10.5 * s, 1 * s, 6.8 * s);
-  ctx.bezierCurveTo(1 * s, 3.2 * s, 3.8 * s, 1 * s, 6.6 * s, 1 * s);
-  ctx.bezierCurveTo(8.8 * s, 1 * s, 10.6 * s, 2.2 * s, 12 * s, 4 * s);
-  ctx.bezierCurveTo(13.4 * s, 2.2 * s, 15.2 * s, 1 * s, 17.4 * s, 1 * s);
-  ctx.bezierCurveTo(20.2 * s, 1 * s, 23 * s, 3.2 * s, 23 * s, 6.8 * s);
-  ctx.bezierCurveTo(23 * s, 10.5 * s, 20 * s, 14.5 * s, 12 * s, 21 * s);
-  ctx.closePath();
-  ctx.strokeStyle = TEXT_GRAY;
-  ctx.lineWidth = 2 * s;
-  ctx.stroke();
-  ctx.restore();
-}
-
 function measureCtx() {
   return document.createElement("canvas").getContext("2d");
 }
 
+/** Loads the images an embed needs to draw: image grid, video still, link thumbnail. */
+async function loadEmbedMedia(embed) {
+  const [images, videoThumb, externalThumb] = await Promise.all([
+    Promise.all((embed.images ?? []).map((im) => loadRemoteImage(im.fullsize || im.thumb))),
+    embed.video ? loadRemoteImage(embed.video.thumbnail) : Promise.resolve(null),
+    embed.external ? loadRemoteImage(embed.external.thumb) : Promise.resolve(null),
+  ]);
+  return { images, videoThumb, externalThumb };
+}
+
 /**
- * Renders `post` onto `canvas`, sizing the canvas to fit the content.
- * Returns the resolved embed image count actually drawn (useful for tests).
+ * Loads every image the card needs and measures the layout.
+ *
+ * Nothing here depends on the output size, so one prepare feeds any number of
+ * size presets -- which is what stops a two-size result from fetching each
+ * avatar and embed image twice.
+ *
+ * @returns {{cardHeight: number, imageCount: number,
+ *            paintBackground: (ctx: CanvasRenderingContext2D, width: number, height: number) => void,
+ *            drawCard: (ctx: CanvasRenderingContext2D) => void}}
+ *   `drawCard` paints the card at the origin, at its natural size.
  */
-export async function renderPostCard(canvas, { post, backgroundId, customBackgroundImage }) {
+export async function preparePostCard({ post, backgroundId, customBackgroundImage }) {
   const record = post.record ?? {};
   const author = post.author ?? {};
 
@@ -301,6 +289,10 @@ export async function renderPostCard(canvas, { post, backgroundId, customBackgro
     resolveEmbed(post),
     customBackgroundImage ? loadImage(customBackgroundImage) : Promise.resolve(null),
   ]);
+
+  // Embed media is loaded here rather than mid-draw, so drawing stays
+  // synchronous and can be repeated per size without refetching.
+  const media = await loadEmbedMedia(embed);
 
   // --- Measurement pass (font metrics only; independent of canvas size) ---
   const measure = measureCtx();
@@ -348,147 +340,189 @@ export async function renderPostCard(canvas, { post, backgroundId, customBackgro
     footerHeight +
     CARD_PAD;
 
-  const canvasHeight = Math.round(cardHeight + OUTER_PAD * 2);
-  canvas.width = CANVAS_WIDTH;
-  canvas.height = canvasHeight;
-  const ctx = canvas.getContext("2d");
-
-  // --- Background ---
-  if (customBg) {
-    ctx.filter = "blur(6px) brightness(0.85)";
-    drawImageCover(ctx, customBg, -20, -20, CANVAS_WIDTH + 40, canvasHeight + 40);
-    ctx.filter = "none";
-  } else {
-    const preset = BACKGROUND_PRESETS.find((p) => p.id === backgroundId) ?? BACKGROUND_PRESETS[0];
-    ctx.fillStyle = preset.paint(ctx, CANVAS_WIDTH, canvasHeight);
-    ctx.fillRect(0, 0, CANVAS_WIDTH, canvasHeight);
+  function paintBackground(ctx, width, height) {
+    // --- Background ---
+    if (customBg) {
+      ctx.filter = "blur(6px) brightness(0.85)";
+      drawImageCover(ctx, customBg, -20, -20, width + 40, height + 40);
+      ctx.filter = "none";
+    } else {
+      const preset = BACKGROUND_PRESETS.find((p) => p.id === backgroundId) ?? BACKGROUND_PRESETS[0];
+      ctx.fillStyle = preset.paint(ctx, width, height);
+      ctx.fillRect(0, 0, width, height);
+    }
   }
 
-  // --- Card shadow + background ---
-  const cardX = OUTER_PAD;
-  const cardY = OUTER_PAD;
-  ctx.save();
-  ctx.shadowColor = "rgba(0,0,0,0.28)";
-  ctx.shadowBlur = 40;
-  ctx.shadowOffsetY = 18;
-  roundRectPath(ctx, cardX, cardY, CARD_WIDTH, cardHeight, 28);
-  ctx.fillStyle = "#ffffff";
-  ctx.fill();
-  ctx.restore();
+  function drawCard(ctx) {
+    // The card is drawn at the origin at its natural size; the caller's
+    // transform decides where it lands and how big it ends up.
+    const cardX = 0;
+    const cardY = 0;
 
-  let cx = cardX + CARD_PAD;
-  let cy = cardY + CARD_PAD;
-
-  // --- Header: avatar + name/handle + logo mark ---
-  ctx.save();
-  ctx.beginPath();
-  ctx.arc(cx + AVATAR_SIZE / 2, cy + AVATAR_SIZE / 2, AVATAR_SIZE / 2, 0, Math.PI * 2);
-  ctx.closePath();
-  ctx.clip();
-  if (avatarImg) {
-    drawImageCover(ctx, avatarImg, cx, cy, AVATAR_SIZE, AVATAR_SIZE);
-  } else {
-    ctx.fillStyle = "#cfd9de";
-    ctx.fillRect(cx, cy, AVATAR_SIZE, AVATAR_SIZE);
-  }
-  ctx.restore();
-
-  const nameX = cx + AVATAR_SIZE + 18;
-  ctx.textBaseline = "alphabetic";
-  ctx.font = `700 28px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
-  ctx.fillStyle = TEXT_DARK;
-  ctx.fillText(author.displayName || author.handle || "unknown", nameX, cy + 30);
-  ctx.font = `400 24px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
-  ctx.fillStyle = TEXT_GRAY;
-  ctx.fillText(`@${author.handle ?? "unknown"}`, nameX, cy + 58);
-
-  ctx.font = `28px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
-  ctx.textAlign = "right";
-  ctx.fillStyle = BRAND_BLUE;
-  ctx.fillText("🦋", cardX + CARD_WIDTH - CARD_PAD, cy + 40);
-  ctx.textAlign = "left";
-
-  cy += headerHeight + 28;
-
-  // --- Body text ---
-  ctx.font = `400 ${BODY_FONT_SIZE}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
-  drawLines(ctx, bodyLines, cx, cy + BODY_FONT_SIZE, BODY_LINE_HEIGHT, { text: TEXT_DARK, link: BRAND_BLUE });
-  cy += textHeight;
-
-  // --- Media ---
-  if (embed.images?.length) {
-    cy += mediaGap;
-    const imgs = await Promise.all(embed.images.map((im) => loadRemoteImage(im.fullsize || im.thumb)));
-    drawImagesGrid(ctx, imgs, cx, cy, CONTENT_WIDTH, mediaHeight);
-    cy += mediaHeight;
-  } else if (embed.video) {
-    cy += mediaGap;
-    const thumb = await loadRemoteImage(embed.video.thumbnail);
-    roundRectPath(ctx, cx, cy, CONTENT_WIDTH, mediaHeight, 16);
+    // --- Card shadow + background ---
     ctx.save();
+    ctx.shadowColor = "rgba(0,0,0,0.28)";
+    ctx.shadowBlur = 40;
+    ctx.shadowOffsetY = 18;
+    roundRectPath(ctx, cardX, cardY, CARD_WIDTH, cardHeight, 28);
+    ctx.fillStyle = "#ffffff";
+    ctx.fill();
+    ctx.restore();
+
+    let cx = cardX + CARD_PAD;
+    let cy = cardY + CARD_PAD;
+
+    // --- Header: avatar + name/handle + logo mark ---
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cx + AVATAR_SIZE / 2, cy + AVATAR_SIZE / 2, AVATAR_SIZE / 2, 0, Math.PI * 2);
+    ctx.closePath();
     ctx.clip();
-    if (thumb) drawImageCover(ctx, thumb, cx, cy, CONTENT_WIDTH, mediaHeight);
-    else {
-      ctx.fillStyle = "#111418";
-      ctx.fillRect(cx, cy, CONTENT_WIDTH, mediaHeight);
+    if (avatarImg) {
+      drawImageCover(ctx, avatarImg, cx, cy, AVATAR_SIZE, AVATAR_SIZE);
+    } else {
+      ctx.fillStyle = "#cfd9de";
+      ctx.fillRect(cx, cy, AVATAR_SIZE, AVATAR_SIZE);
     }
     ctx.restore();
-    const playCx = cx + CONTENT_WIDTH / 2;
-    const playCy = cy + mediaHeight / 2;
-    ctx.beginPath();
-    ctx.arc(playCx, playCy, 44, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(0,0,0,0.55)";
-    ctx.fill();
-    ctx.beginPath();
-    ctx.moveTo(playCx - 14, playCy - 22);
-    ctx.lineTo(playCx - 14, playCy + 22);
-    ctx.lineTo(playCx + 22, playCy);
-    ctx.closePath();
-    ctx.fillStyle = "#fff";
-    ctx.fill();
-    cy += mediaHeight;
-  } else if (embed.external) {
-    cy += mediaGap;
-    drawExternalCard(ctx, embed.external, cx, cy, CONTENT_WIDTH, mediaHeight, await loadRemoteImage(embed.external.thumb));
-    cy += mediaHeight;
-  }
 
-  // --- Quote embed ---
-  if (embed.quote) {
-    cy += mediaGap;
-    quoteHeight = drawQuote(ctx, embed.quote, cx, cy, CONTENT_WIDTH, quoteLines);
-    cy += quoteHeight;
-  }
-
-  cy += 32;
-
-  // --- Footer: timestamp + divider + stats ---
-  ctx.font = `400 22px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
-  ctx.fillStyle = TEXT_GRAY;
-  ctx.fillText(formatTimestamp(record.createdAt ?? new Date().toISOString()), cx, cy + 22);
-  cy += 34 + 14;
-
-  ctx.strokeStyle = BORDER;
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(cx, cy);
-  ctx.lineTo(cardX + CARD_WIDTH - CARD_PAD, cy);
-  ctx.stroke();
-  cy += 34;
-
-  const stats = [
-    { icon: drawReplyIcon, count: post.replyCount },
-    { icon: drawRepostIcon, count: (post.repostCount ?? 0) + (post.quoteCount ?? 0) },
-    { icon: drawHeartIcon, count: post.likeCount },
-  ];
-  let statX = cx;
-  ctx.font = `400 24px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
-  for (const stat of stats) {
-    stat.icon(ctx, statX + 12, cy, 24);
+    const nameX = cx + AVATAR_SIZE + 18;
+    ctx.textBaseline = "alphabetic";
+    ctx.font = `700 28px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+    ctx.fillStyle = TEXT_DARK;
+    ctx.fillText(author.displayName || author.handle || "unknown", nameX, cy + 30);
+    ctx.font = `400 24px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
     ctx.fillStyle = TEXT_GRAY;
-    ctx.fillText(formatCount(stat.count), statX + 32, cy + 8);
-    statX += 32 + ctx.measureText(formatCount(stat.count)).width + 56;
+    ctx.fillText(`@${author.handle ?? "unknown"}`, nameX, cy + 58);
+
+    const logoHeight = 30;
+    drawBlueskyLogo(
+      ctx,
+      cardX + CARD_WIDTH - CARD_PAD - blueskyLogoWidth(logoHeight),
+      cy + (headerHeight - logoHeight) / 2,
+      logoHeight,
+      BRAND_BLUE,
+    );
+
+    cy += headerHeight + 28;
+
+    // --- Body text ---
+    ctx.font = `400 ${BODY_FONT_SIZE}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+    drawLines(ctx, bodyLines, cx, cy + BODY_FONT_SIZE, BODY_LINE_HEIGHT, { text: TEXT_DARK, link: BRAND_BLUE });
+    cy += textHeight;
+
+    // --- Media ---
+    if (embed.images?.length) {
+      cy += mediaGap;
+      drawImagesGrid(ctx, media.images, cx, cy, CONTENT_WIDTH, mediaHeight);
+      cy += mediaHeight;
+    } else if (embed.video) {
+      cy += mediaGap;
+      const thumb = media.videoThumb;
+      roundRectPath(ctx, cx, cy, CONTENT_WIDTH, mediaHeight, 16);
+      ctx.save();
+      ctx.clip();
+      if (thumb) drawImageCover(ctx, thumb, cx, cy, CONTENT_WIDTH, mediaHeight);
+      else {
+        ctx.fillStyle = "#111418";
+        ctx.fillRect(cx, cy, CONTENT_WIDTH, mediaHeight);
+      }
+      ctx.restore();
+      const playCx = cx + CONTENT_WIDTH / 2;
+      const playCy = cy + mediaHeight / 2;
+      ctx.beginPath();
+      ctx.arc(playCx, playCy, 44, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(0,0,0,0.55)";
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(playCx - 14, playCy - 22);
+      ctx.lineTo(playCx - 14, playCy + 22);
+      ctx.lineTo(playCx + 22, playCy);
+      ctx.closePath();
+      ctx.fillStyle = "#fff";
+      ctx.fill();
+      cy += mediaHeight;
+    } else if (embed.external) {
+      cy += mediaGap;
+      drawExternalCard(ctx, embed.external, cx, cy, CONTENT_WIDTH, mediaHeight, media.externalThumb);
+      cy += mediaHeight;
+    }
+
+    // --- Quote embed ---
+    if (embed.quote) {
+      cy += mediaGap;
+      quoteHeight = drawQuote(ctx, embed.quote, cx, cy, CONTENT_WIDTH, quoteLines);
+      cy += quoteHeight;
+    }
+
+    cy += 32;
+
+    // --- Footer: timestamp + divider + stats ---
+    ctx.font = `400 22px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+    ctx.fillStyle = TEXT_GRAY;
+    ctx.fillText(formatTimestamp(record.createdAt ?? new Date().toISOString()), cx, cy + 22);
+    cy += 34 + 14;
+
+    ctx.strokeStyle = BORDER;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cardX + CARD_WIDTH - CARD_PAD, cy);
+    ctx.stroke();
+    cy += 34;
+
+    const stats = [
+      { icon: "reply", count: post.replyCount },
+      { icon: "repost", count: (post.repostCount ?? 0) + (post.quoteCount ?? 0) },
+      { icon: "like", count: post.likeCount },
+    ];
+    let statX = cx;
+    ctx.font = `400 24px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+    for (const stat of stats) {
+      drawIcon(ctx, stat.icon, statX + 12, cy, 24, TEXT_GRAY);
+      ctx.fillStyle = TEXT_GRAY;
+      ctx.fillText(formatCount(stat.count), statX + 32, cy + 8);
+      statX += 32 + ctx.measureText(formatCount(stat.count)).width + 56;
+    }
   }
+
+  return { cardHeight, imageCount: media.images.length, paintBackground, drawCard };
+}
+
+/** Sizes `canvas` for one size preset and draws a prepared card into it. */
+function drawPreparedCard(canvas, prepared, sizeId) {
+  const size = SIZE_PRESETS.find((s) => s.id === sizeId) ?? SIZE_PRESETS[0];
+  const placement = fitCardTransform(prepared.cardHeight, size);
+
+  canvas.width = placement.width;
+  canvas.height = placement.height;
+  const ctx = canvas.getContext("2d");
+
+  prepared.paintBackground(ctx, placement.width, placement.height);
+
+  ctx.save();
+  ctx.translate(placement.x, placement.y);
+  ctx.scale(placement.scale, placement.scale);
+  prepared.drawCard(ctx);
+  ctx.restore();
+
+  return placement;
+}
+
+/**
+ * Renders `post` onto one canvas per size, preparing the post only once.
+ * Returns the number of embed images drawn.
+ *
+ * For a single size, pass a single entry: `{ original: canvas }`.
+ *
+ * @param {Record<string, HTMLCanvasElement>} canvasesBySizeId  Keyed by SIZE_PRESETS id.
+ */
+export async function renderPostCardSizes(canvasesBySizeId, { post, backgroundId, customBackgroundImage }) {
+  const prepared = await preparePostCard({ post, backgroundId, customBackgroundImage });
+  for (const [sizeId, canvas] of Object.entries(canvasesBySizeId)) {
+    if (canvas) drawPreparedCard(canvas, prepared, sizeId);
+  }
+  return prepared.imageCount;
 }
 
 function imagesGridHeight(count, width) {

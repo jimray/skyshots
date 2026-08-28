@@ -4,26 +4,45 @@ A small web app that turns a list of Bluesky post links into shareable
 screenshot images — a Bluesky-style post card rendered on a decorative
 background, exported as a PNG.
 
-Before rendering anything, it checks whether the post's author has enabled
-**Settings → Moderation → Logged-out visibility** ("Discourage apps from
-showing my account to logged-out users") on bsky.app. If they have, the app
-shows an explanation instead of a screenshot.
+It checks two separate signals that an author would rather not be shown. If
+either applies, the screenshots are still rendered but sit behind a
+dismissible cover, and downloading and zooming are disabled until the reader
+dismisses it.
 
-## Why the logged-out check matters, and how it actually works
+## The two opt-out signals, and how they actually work
 
-That setting doesn't gate Bluesky's own API — `public.api.bsky.app` will
-happily hand back the post either way. What it does is set a
-`!no-unauthenticated` [self-label](https://docs.bsky.app/docs/advanced-guides/moderation)
-on the author's profile record. Bluesky's official apps read that label and
-hide the content from logged-out visitors; it's up to every other client to
-do the same. This tool checks `post.author.labels` for that value (see
-`isLoggedOutRestricted` in `public/js/atproto.js`) and refuses to render a
-screenshot when it's present — for the post itself, and separately for any
-quote-posted content embedded inside it.
+**Logged-out visibility.** **Settings → Moderation → Logged-out visibility**
+("Discourage apps from showing my account to logged-out users") on bsky.app
+doesn't gate Bluesky's own API — `public.api.bsky.app` will happily hand back
+the post either way. What it does is set a `!no-unauthenticated`
+[self-label](https://docs.bsky.app/docs/advanced-guides/moderation) on the
+author's profile record. Bluesky's official apps read that label and hide the
+content from logged-out visitors; it's up to every other client to do the
+same. This tool checks `post.author.labels` for that value — for the post
+itself, and separately for any quote-posted content embedded inside it.
 
-This was verified against two real accounts that currently have the setting
-enabled (found via a public GitHub issue referencing the label, confirmed
-live against the API), not just against the documented shape of the label.
+**Content visibility declaration.** `app.bsky.actor.contentVisibilityDeclaration`
+is a record in the author's own repo under the literal key `self`, with a
+required boolean `hideFromAlgorithmicRecommendations`. It is not carried on
+the post view, so it costs one `com.atproto.repo.getRecord` per author (DIDs
+are deduplicated, and the requests run alongside the post fetch rather than
+after it). The lexicon requires that a **missing record be read as false**,
+which arrives as an XRPC `RecordNotFound`; any *other* failure is read as
+hidden, because a cover the reader can dismiss is the cheaper mistake.
+
+Both signals are turned into a reason by `restrictionFor` in
+`public/js/atproto.js`.
+
+Note that `hideFromAlgorithmicRecommendations` is, by its own description,
+about *content discovery surfaces*. Treating it as "don't screenshot me" is a
+deliberately stricter reading than the field strictly requires.
+
+The logged-out label was verified against two real accounts that have the
+setting enabled (found via a public GitHub issue referencing the label,
+confirmed live against the API). The declaration record was verified against
+the published lexicon and against the live `RecordNotFound` response; no
+sampled account has one set yet, so the `true` path is covered by fixtures
+rather than by live data.
 
 ## How it works
 
@@ -34,10 +53,21 @@ live against the API), not just against the documented shape of the label.
   avatar, name/handle, rich text (mentions/links colored using the post's
   real facets, with correct UTF-8 byte-offset handling), image grids,
   external link cards, video thumbnails with a play badge, quote-post cards
-  (which get the same logged-out-visibility check), and a stats row with
-  hand-drawn reply/repost/like icons.
-- **Backgrounds**: six built-in gradients, or upload your own image (used as
-  a blurred backdrop behind the card).
+  (which get the same logged-out-visibility check), and a stats row using
+  Bluesky's own reply/repost/like icons.
+- **Backgrounds**: five built-in gradients (Bluesky blue first, and the
+  default), or upload your own image (used as a blurred backdrop behind the
+  card).
+- **Sizes**: every post renders at two sizes, each with its own download
+  button -- **Original**, which grows to fit the post, and **Square**
+  (1200x1200) for Instagram. The card is drawn once and fitted into each
+  frame, scaling down only when it is too tall to fit. Sizes are a data list
+  (`SIZE_PRESETS` in `render-card.js`), so another frame is one entry.
+- **Zoom**: clicking (or tabbing to and pressing Enter on) a preview opens it
+  enlarged and centered, with its size, dimensions and a download button. It
+  is a native `<dialog>` opened with `showModal()`, so Esc, the focus trap and
+  the backdrop are the browser's, not reimplemented. The image is capped at
+  its own pixel width, so a screenshot is never upscaled.
 - **The one bit of backend**: `cdn.bsky.app` (avatars, post images, video
   thumbnails) doesn't send `Access-Control-Allow-Origin`, so drawing those
   images into a `<canvas>` and then exporting it as a PNG would throw a
@@ -66,11 +96,25 @@ background, and click **Generate screenshots**. Each result gets its own
 | State | Meaning |
 |---|---|
 | Rendered card + download button | Post fetched and drawn successfully |
-| 🔒 restricted notice | The author has logged-out visibility restricted — nothing is rendered |
+| 🔒 covered previews | The author opted out via either signal — rendered, but covered until dismissed; download and zoom stay off while covered |
 | ⚠️ "Post not found" | Deleted post, bad rkey, or an unresolvable handle |
 | ⚠️ parse error | The line isn't a recognizable `bsky.app` post link or `at://` URI |
 
 ## Testing notes
+
+`npm test` runs the unit tests (`node --test`, no dependencies): background
+preset order and hues, the size-fitting geometry, icon/logo placement,
+download filenames, and the opt-out logic (with `fetch` stubbed: record
+present/absent/unreadable, DID deduplication, and which signal wins). Canvas is absent in Node, so the icon tests stub `Path2D`
+and record the context calls.
+
+The zoom overlay has no unit test: its behaviour is `<dialog>` and CSS, which
+a test without a browser could only restate.
+
+The icon and logo path data was checked by flattening each path (beziers and
+elliptical arcs) and rasterizing it to ASCII, which confirms the shape and
+that it fills its viewBox. That check is not automated -- it exists to catch a
+mistyped path when one is replaced.
 
 This was exercised end-to-end with Playwright/Chromium against real Bluesky
 data: real posts covering plain text, image grids, external link cards,
@@ -95,3 +139,7 @@ canvas-export path was validated against real image bytes, not mocks.)
 - Third-party clients that don't respect `!no-unauthenticated` can still
   show these posts elsewhere; this tool controls only what it itself
   generates.
+- The opt-out cover is a DOM layer over a preview that has already been
+  rendered, not a redaction of the pixels. It gates the app's own download and
+  zoom paths, and a reader can dismiss it deliberately — it is a speed bump
+  and a notice, not an enforcement boundary.

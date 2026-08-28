@@ -43,6 +43,21 @@ main {
   padding: 48px 20px 96px;
 }
 
+/* This is a desktop tool: the wider the window, the bigger the previews get.
+   The card itself is rendered 1200px wide, so even the widest column here
+   still shows it downscaled rather than blown up past its native size. */
+@media (min-width: 1024px) {
+  main {
+    max-width: 1000px;
+  }
+}
+
+@media (min-width: 1440px) {
+  main {
+    max-width: 1280px;
+  }
+}
+
 .page-header h1 {
   font-size: 1.75rem;
   margin: 0 0 8px;
@@ -51,6 +66,8 @@ main {
 .page-header p {
   color: var(--text-muted);
   margin: 0 0 32px;
+  /* The page widens for the previews, not for the prose. */
+  max-width: 68ch;
 }
 
 .page-header code {
@@ -200,10 +217,59 @@ button[type="submit"]:disabled {
   line-height: 1.5;
 }
 
+/* One column per output size, side by side until the viewport is too narrow. */
+.size-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 20px;
+  align-items: start;
+}
+
+.size-option {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.size-option__caption {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 0.8rem;
+}
+
+.size-option__label {
+  font-weight: 600;
+}
+
+.size-option__dims {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A button, so the preview can be zoomed from the keyboard as well as the
+   mouse. Everything here undoes the default button chrome. */
 .canvas-wrap {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  appearance: none;
   border-radius: 12px;
   overflow: hidden;
   background: var(--bg);
+  cursor: zoom-in;
+}
+
+.canvas-wrap:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 3px;
+}
+
+.canvas-wrap:disabled {
+  cursor: default;
 }
 
 .canvas-wrap.is-drawing {
@@ -217,7 +283,7 @@ button[type="submit"]:disabled {
 }
 
 .download-btn {
-  margin-top: 14px;
+  margin-top: 12px;
   background: transparent;
   color: var(--brand);
   border: 1px solid var(--brand);
@@ -230,4 +296,124 @@ button[type="submit"]:disabled {
 .download-btn:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* --- Author opt-out cover ---
+   Sits over the previews when the author has asked not to be shown. The
+   previews underneath are rendered, so this is a gate rather than a redaction:
+   downloading and zooming are disabled until it is dismissed. */
+.covered-area {
+  position: relative;
+}
+
+.content-cover {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 24px;
+  border-radius: 12px;
+  background: rgb(0 0 0 / 0.6);
+  color: #fff;
+  text-align: center;
+}
+
+.content-cover__message {
+  margin: 0;
+  max-width: 46ch;
+  font-weight: 600;
+  text-wrap: balance;
+}
+
+.content-cover__dismiss {
+  padding: 8px 18px;
+  border: 1px solid rgb(255 255 255 / 0.6);
+  border-radius: 999px;
+  background: transparent;
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.content-cover__dismiss:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+/* --- Zoom overlay ---
+   A native <dialog> opened with showModal(): Esc, the focus trap and the
+   backdrop come from the browser, so only appearance is set here. */
+.zoom {
+  max-width: 96vw;
+  max-height: 96vh;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  overflow: visible;
+  color: #fff;
+}
+
+.zoom::backdrop {
+  background: rgb(0 0 0 / 0.78);
+}
+
+.zoom__dismiss {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
+.zoom__close {
+  padding: 2px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #fff;
+  font-size: 1.75rem;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.zoom__close:focus-visible,
+.zoom__download:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+/* max-width is set on the element, capped at the image's own pixel width so a
+   small screenshot is never blown up. */
+.zoom__image {
+  display: block;
+  width: auto;
+  height: auto;
+  max-height: 80vh;
+  border-radius: 12px;
+  background: var(--panel);
+}
+
+.zoom__caption {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin: 12px 0 0;
+  font-size: 0.85rem;
+}
+
+.zoom__caption .zoom__dims {
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+}
+
+.zoom__download {
+  margin-top: 10px;
+  padding: 8px 18px;
+  border: 1px solid rgb(255 255 255 / 0.6);
+  border-radius: 999px;
+  background: transparent;
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
 }

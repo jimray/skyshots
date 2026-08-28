@@ -1,9 +1,16 @@
-import { BACKGROUND_PRESETS, renderPostCard } from "../render-card.js";
+import { BACKGROUND_PRESETS, SIZE_PRESETS, renderPostCardSizes } from "../render-card.js";
+import { downloadCanvas, screenshotFilename } from "../download-canvas.js";
+import { openImageZoom } from "./image-zoom.js";
 
 /**
  * <post-result-card> owns the lifecycle for a single input line: shows a
- * loading state, then either the rendered screenshot + download button, or
- * an error explanation (parse failure, not found, or logged-out-restricted).
+ * loading state, then either one rendered screenshot per SIZE_PRESETS entry --
+ * each separately downloadable, and clickable to zoom -- or an error
+ * explanation (parse failure or post not found).
+ *
+ * When the author has asked not to be shown, the previews are still rendered
+ * but sit behind a dismissible cover, and downloading and zooming stay off
+ * until it is dismissed.
  */
 export class PostResultCard extends HTMLElement {
   static get observedAttributes() {
@@ -13,7 +20,10 @@ export class PostResultCard extends HTMLElement {
   #post = null;
   #backgroundId = BACKGROUND_PRESETS[0].id;
   #customBackgroundImage = null;
-  #status = "loading"; // loading | restricted | error | ready
+  #status = "loading"; // loading | error | ready
+  #restriction = null;
+  #coverDismissed = false;
+  #drawn = false;
   #message = "";
   #sourceLine = "";
 
@@ -34,25 +44,49 @@ export class PostResultCard extends HTMLElement {
     this.render();
   }
 
-  setRestricted(sourceLine, post) {
-    this.#sourceLine = sourceLine;
-    this.#status = "restricted";
-    this.#post = post;
-    this.render();
-  }
-
   /** Sets the background to use for the next draw without triggering a redraw itself. */
   primeBackground(backgroundId, customBackgroundImage) {
     this.#backgroundId = backgroundId;
     this.#customBackgroundImage = customBackgroundImage;
   }
 
-  async setPost(sourceLine, post) {
+  /**
+   * @param {string} sourceLine
+   * @param {object} post
+   * @param {{id: string, message: string}|null} [restriction]  From restrictionFor().
+   */
+  async setPost(sourceLine, post, restriction = null) {
     this.#sourceLine = sourceLine;
     this.#status = "ready";
     this.#post = post;
+    this.#restriction = restriction;
+    this.#coverDismissed = false;
+    this.#drawn = false;
     this.render();
     await this.#draw();
+  }
+
+  /** True while the author's opt-out is still covering the previews. */
+  get #covered() {
+    return Boolean(this.#restriction) && !this.#coverDismissed;
+  }
+
+  /**
+   * Downloading and zooming are only offered for previews that are both drawn
+   * and not behind a cover. Redrawing (a background change, say) must not
+   * quietly switch them back on underneath one.
+   */
+  #syncControls() {
+    const enabled = this.#drawn && !this.#covered;
+    this.querySelectorAll(".download-btn, .canvas-wrap").forEach((btn) => {
+      btn.disabled = !enabled;
+    });
+  }
+
+  #dismissCover() {
+    this.#coverDismissed = true;
+    this.querySelector(".content-cover")?.remove();
+    this.#syncControls();
   }
 
   async setBackground(backgroundId, customBackgroundImage) {
@@ -61,39 +95,62 @@ export class PostResultCard extends HTMLElement {
     if (this.#status === "ready") await this.#draw();
   }
 
+  /** Every size's canvas, keyed by size id, as renderPostCardSizes expects. */
+  #canvases() {
+    return Object.fromEntries(
+      SIZE_PRESETS.map((size) => [size.id, this.querySelector(`canvas[data-size-id="${size.id}"]`)]),
+    );
+  }
+
   async #draw() {
-    const canvas = this.querySelector("canvas");
-    if (!canvas || !this.#post) return;
-    const wrapper = this.querySelector(".canvas-wrap");
-    wrapper.classList.add("is-drawing");
+    const canvases = this.#canvases();
+    if (!this.#post || Object.values(canvases).some((c) => !c)) return;
+
+    const wrappers = [...this.querySelectorAll(".canvas-wrap")];
+    wrappers.forEach((w) => w.classList.add("is-drawing"));
     try {
-      await renderPostCard(canvas, {
+      await renderPostCardSizes(canvases, {
         post: this.#post,
         backgroundId: this.#backgroundId,
         customBackgroundImage: this.#customBackgroundImage,
       });
-      const downloadBtn = this.querySelector(".download-btn");
-      downloadBtn.disabled = false;
+      for (const canvas of Object.values(canvases)) {
+        const option = canvas.closest(".size-option");
+        const size = SIZE_PRESETS.find((s) => s.id === canvas.dataset.sizeId);
+        option.querySelector(".size-option__dims").textContent = `${canvas.width} x ${canvas.height}`;
+        // The dimensions are only known once it is drawn.
+        option.querySelector(".canvas-wrap").setAttribute(
+          "aria-label",
+          `Zoom the ${size?.label ?? canvas.dataset.sizeId} screenshot, ${canvas.width} by ${canvas.height}`,
+        );
+      }
+      this.#drawn = true;
+      this.#syncControls();
     } catch (err) {
       this.setError(this.#sourceLine, `Couldn't render this post: ${err.message}`);
       return;
     } finally {
-      wrapper.classList.remove("is-drawing");
+      wrappers.forEach((w) => w.classList.remove("is-drawing"));
     }
   }
 
-  #download() {
-    const canvas = this.querySelector("canvas");
+  #filename(sizeId) {
+    return screenshotFilename(this.#post?.author?.handle, sizeId, Date.now());
+  }
+
+  #download(sizeId) {
+    // The buttons are disabled while covered; this is the backstop.
+    if (this.#covered) return;
+    const canvas = this.querySelector(`canvas[data-size-id="${sizeId}"]`);
+    if (canvas) downloadCanvas(canvas, this.#filename(sizeId));
+  }
+
+  #zoom(sizeId) {
+    if (this.#covered) return;
+    const canvas = this.querySelector(`canvas[data-size-id="${sizeId}"]`);
     if (!canvas) return;
-    canvas.toBlob((blob) => {
-      const url = URL.createObjectURL(blob);
-      const handle = this.#post?.author?.handle ?? "post";
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `bluesky-${handle}-${Date.now()}.png`;
-      a.click();
-      URL.revokeObjectURL(url);
-    }, "image/png");
+    const label = SIZE_PRESETS.find((s) => s.id === sizeId)?.label ?? sizeId;
+    openImageZoom({ canvas, label, filename: this.#filename(sizeId) });
   }
 
   render() {
@@ -115,31 +172,55 @@ export class PostResultCard extends HTMLElement {
       return;
     }
 
-    if (this.#status === "restricted") {
-      const handle = this.#post?.author?.handle ?? "this account";
-      this.innerHTML = `
-        <div class="result-card result-card--restricted">
-          <p class="source-line">${escapeHtml(this.#sourceLine)}</p>
-          <p class="status status--restricted">
-            🔒 <strong>@${escapeHtml(handle)}</strong> has enabled
-            <em>"Discourage apps from showing my account to logged-out users"</em>
-            in their Bluesky settings. This tool respects that preference and
-            won't generate a screenshot for this post.
-          </p>
-        </div>`;
-      return;
-    }
-
     // ready
+    const options = SIZE_PRESETS.map(
+      (size) => `
+        <figure class="size-option">
+          <button
+            type="button"
+            class="canvas-wrap"
+            data-size-id="${size.id}"
+            aria-label="Zoom the ${escapeHtml(size.label)} screenshot"
+            disabled
+          >
+            <canvas data-size-id="${size.id}"></canvas>
+          </button>
+          <figcaption class="size-option__caption">
+            <span class="size-option__label">${escapeHtml(size.label)}</span>
+            <span class="size-option__dims"></span>
+          </figcaption>
+          <button type="button" class="download-btn" data-size-id="${size.id}" disabled>
+            Download PNG
+          </button>
+        </figure>`,
+    ).join("");
+
+    const cover = this.#covered
+      ? `
+        <div class="content-cover">
+          <p class="content-cover__message">${escapeHtml(this.#restriction.message)}</p>
+          <button type="button" class="content-cover__dismiss">Show anyway</button>
+        </div>`
+      : "";
+
     this.innerHTML = `
       <div class="result-card result-card--ready">
         <p class="source-line">${escapeHtml(this.#sourceLine)}</p>
-        <div class="canvas-wrap">
-          <canvas></canvas>
+        <div class="covered-area">
+          <div class="size-grid">${options}</div>
+          ${cover}
         </div>
-        <button type="button" class="download-btn" disabled>Download PNG</button>
       </div>`;
-    this.querySelector(".download-btn").addEventListener("click", () => this.#download());
+
+    this.querySelector(".content-cover__dismiss")?.addEventListener("click", () => this.#dismissCover());
+
+    this.querySelectorAll(".download-btn").forEach((btn) => {
+      btn.addEventListener("click", () => this.#download(btn.dataset.sizeId));
+    });
+
+    this.querySelectorAll(".canvas-wrap").forEach((btn) => {
+      btn.addEventListener("click", () => this.#zoom(btn.dataset.sizeId));
+    });
   }
 }
 

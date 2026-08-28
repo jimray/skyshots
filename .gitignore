@@ -1,1 +1,4 @@
 node_modules/
+
+# Local sandbox/VM tooling artifact, not part of the app.
+.vm

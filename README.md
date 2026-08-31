@@ -54,7 +54,10 @@ rather than by live data.
   real facets, with correct UTF-8 byte-offset handling), image grids,
   external link cards, video thumbnails with a play badge, quote-post cards
   (which get the same logged-out-visibility check), and a stats row using
-  Bluesky's own reply/repost/like icons.
+  Bluesky's own reply/repost/like icons. A post with a single image gets its
+  true aspect ratio, however tall that is, so squarish and portrait images are
+  shown whole rather than cropped into a landscape box; multi-image grids stay
+  fixed-height cropped tiles, as they are in the Bluesky app.
 - **Backgrounds**: two cloud photographs (light is the default, dark second)
   and five gradients, or upload your own image. Uploads are blurred and dimmed
   so the card stays readable; the built-in cloud images are not, since they are

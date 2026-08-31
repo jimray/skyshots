@@ -349,7 +349,7 @@ export async function preparePostCard({ post }) {
   let mediaHeight = 0;
   const mediaGap = 24;
   if (embed.images?.length) {
-    mediaHeight = imagesGridHeight(embed.images.length, CONTENT_WIDTH);
+    mediaHeight = imagesGridHeight(embed.images, media.images, CONTENT_WIDTH);
   } else if (embed.video) {
     mediaHeight = CONTENT_WIDTH * 0.62;
   } else if (embed.external) {
@@ -601,10 +601,51 @@ export function drawPreparedCard(canvas, prepared, background, sizeId) {
   return placement;
 }
 
-function imagesGridHeight(count, width) {
-  if (count === 1) return width * 0.6;
-  if (count === 2) return width * 0.42;
-  return width * 0.42;
+// What a single image falls back to when its shape can't be determined. This
+// is the 5:3 box every single image used to get, and it happens to be close to
+// the ratio landscape screenshots arrive at.
+const FALLBACK_IMAGE_ASPECT = 1 / 0.6;
+
+// Multi-image grids stay fixed-height tiles, cropped to fill, which is how the
+// Bluesky app shows them too.
+const GRID_TILE_RATIO = 0.42;
+
+/**
+ * Works out the true width-over-height ratio of an image, preferring what the
+ * post record claims and falling back to the decoded file.
+ *
+ * `aspectRatio` is optional in the lexicon and is not always sane, so anything
+ * non-positive or non-finite is rejected rather than trusted -- otherwise a
+ * zero would divide its way into an infinite card height.
+ */
+function imageAspect(image, loaded) {
+  const declared = image?.aspectRatio;
+  const candidates = [
+    [declared?.width, declared?.height],
+    [loaded?.naturalWidth, loaded?.naturalHeight],
+  ];
+  for (const [w, h] of candidates) {
+    if (Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0) return w / h;
+  }
+  return FALLBACK_IMAGE_ASPECT;
+}
+
+/**
+ * The height an image embed needs at `width`.
+ *
+ * A single image is given its true aspect ratio, however tall that makes it,
+ * so squarish and portrait images are shown whole instead of being cropped
+ * top and bottom to fit a landscape box.
+ *
+ * @param {object[]} images   The embed's images, as the post view carries them.
+ * @param {(HTMLImageElement|null)[]} loaded  The decoded files, positionally.
+ * @param {number} width
+ */
+export function imagesGridHeight(images, loaded, width) {
+  const count = images?.length ?? 0;
+  if (count === 0) return 0;
+  if (count === 1) return width / imageAspect(images[0], loaded?.[0]);
+  return width * GRID_TILE_RATIO;
 }
 
 function drawImagesGrid(ctx, imgs, x, y, w, h) {

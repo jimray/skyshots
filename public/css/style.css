@@ -325,8 +325,20 @@ button[type="submit"]:disabled {
    Sits over the previews when the author has asked not to be shown. The
    previews underneath are rendered, so this is a gate rather than a redaction:
    downloading and zooming are disabled until it is dismissed. */
+/* The preview is capped well below the column width -- at full width it
+   dominates the page, and the exported PNG is unaffected either way. Capping
+   the whole area rather than just the canvas keeps the opt-out cover, which is
+   positioned against this box, aligned with the image. */
 .covered-area {
   position: relative;
+  max-width: 60%;
+}
+
+/* Below this the column is narrow enough that 60% would be too small to read. */
+@media (max-width: 700px) {
+  .covered-area {
+    max-width: 100%;
+  }
 }
 
 .content-cover {

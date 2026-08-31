@@ -55,14 +55,30 @@ rather than by live data.
   external link cards, video thumbnails with a play badge, quote-post cards
   (which get the same logged-out-visibility check), and a stats row using
   Bluesky's own reply/repost/like icons.
-- **Backgrounds**: five built-in gradients (Bluesky blue first, and the
-  default), or upload your own image (used as a blurred backdrop behind the
-  card).
-- **Sizes**: every post renders at two sizes, each with its own download
-  button -- **Original**, which grows to fit the post, and **Square**
-  (1200x1200) for Instagram. The card is drawn once and fitted into each
-  frame, scaling down only when it is too tall to fit. Sizes are a data list
-  (`SIZE_PRESETS` in `render-card.js`), so another frame is one entry.
+- **Backgrounds**: two cloud photographs (light is the default, dark second)
+  and five gradients, or upload your own image. Uploads are blurred and dimmed
+  so the card stays readable; the built-in cloud images are not, since they are
+  designed as backdrops. Both cloud images are composed as a band of cloud
+  under a nearly flat sky, so they are scaled to the frame width with the
+  bottom edge pinned and the space above filled with a sky colour sampled from
+  the image itself (`backgroundImageLayout` in `render-card.js`). That fits any
+  aspect ratio with no cropping or distortion.
+- **Sizes**: each result has buttons to switch output size -- **Original**
+  (1200 wide, grows to fit the post), **Square** (1200x1200) for Instagram,
+  and **16:9** (1920x1080). The card is drawn at its natural size and fitted
+  into the chosen frame, scaling down only when it is too tall, never up.
+  Sizes are a data list (`SIZE_PRESETS` in `render-card.js`), so another frame
+  is one entry.
+
+  16:9 is 1920x1080 rather than 1200x675 because a 675-tall frame leaves only
+  531px of padded height, which would shrink almost every card; at 1080 the
+  card sits at 1:1 unless it is taller than 936.
+
+  Rendering is split three ways so switching is cheap: `preparePostCard` loads
+  the post's images and measures the layout, `resolveBackground` loads the
+  background, and `drawPreparedCard` is a synchronous draw. Both halves are
+  cached per result, so changing size touches no network at all and changing
+  background reloads only the background.
 - **Zoom**: clicking (or tabbing to and pressing Enter on) a preview opens it
   enlarged and centered, with its size, dimensions and a download button. It
   is a native `<dialog>` opened with `showModal()`, so Esc, the focus trap and
@@ -103,9 +119,10 @@ background, and click **Generate screenshots**. Each result gets its own
 ## Testing notes
 
 `npm test` runs the unit tests (`node --test`, no dependencies): background
-preset order and hues, the size-fitting geometry, icon/logo placement,
-download filenames, and the opt-out logic (with `fetch` stubbed: record
-present/absent/unreadable, DID deduplication, and which signal wins). Canvas is absent in Node, so the icon tests stub `Path2D`
+preset order and hues, the size-fitting and background-image geometry,
+icon/logo placement, download filenames, and the opt-out logic (with `fetch`
+stubbed: record present/absent/unreadable, DID deduplication, and which signal
+wins). Canvas is absent in Node, so the icon tests stub `Path2D`
 and record the context calls.
 
 The zoom overlay has no unit test: its behaviour is `<dialog>` and CSS, which

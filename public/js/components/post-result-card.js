@@ -1,12 +1,22 @@
-import { BACKGROUND_PRESETS, SIZE_PRESETS, renderPostCardSizes } from "../render-card.js";
+import {
+  BACKGROUND_PRESETS,
+  SIZE_PRESETS,
+  preparePostCard,
+  resolveBackground,
+  drawPreparedCard,
+} from "../render-card.js";
 import { downloadCanvas, screenshotFilename } from "../download-canvas.js";
 import { openImageZoom } from "./image-zoom.js";
 
 /**
  * <post-result-card> owns the lifecycle for a single input line: shows a
- * loading state, then either one rendered screenshot per SIZE_PRESETS entry --
- * each separately downloadable, and clickable to zoom -- or an error
- * explanation (parse failure or post not found).
+ * loading state, then either the rendered screenshot -- with buttons to switch
+ * output size, downloadable, and clickable to zoom -- or an error explanation
+ * (parse failure or post not found).
+ *
+ * The post and the background are prepared once and cached, so switching size
+ * is a redraw with no network, and switching background reloads only the
+ * background.
  *
  * When the author has asked not to be shown, the previews are still rendered
  * but sit behind a dismissible cover, and downloading and zooming stay off
@@ -24,6 +34,9 @@ export class PostResultCard extends HTMLElement {
   #restriction = null;
   #coverDismissed = false;
   #drawn = false;
+  #sizeId = SIZE_PRESETS[0].id;
+  #prepared = null;
+  #background = null;
   #message = "";
   #sourceLine = "";
 
@@ -62,7 +75,20 @@ export class PostResultCard extends HTMLElement {
     this.#restriction = restriction;
     this.#coverDismissed = false;
     this.#drawn = false;
+    this.#prepared = null;
+    this.#background = null;
+    this.#sizeId = SIZE_PRESETS[0].id;
     this.render();
+    await this.#draw();
+  }
+
+  /** Switches output size. Redraws from the cache; touches no network. */
+  async #setSize(sizeId) {
+    if (sizeId === this.#sizeId) return;
+    this.#sizeId = sizeId;
+    for (const btn of this.querySelectorAll(".size-tab")) {
+      btn.setAttribute("aria-pressed", String(btn.dataset.sizeId === sizeId));
+    }
     await this.#draw();
   }
 
@@ -92,65 +118,58 @@ export class PostResultCard extends HTMLElement {
   async setBackground(backgroundId, customBackgroundImage) {
     this.#backgroundId = backgroundId;
     this.#customBackgroundImage = customBackgroundImage;
+    this.#background = null; // Resolve the new one on the next draw.
     if (this.#status === "ready") await this.#draw();
   }
 
-  /** Every size's canvas, keyed by size id, as renderPostCardSizes expects. */
-  #canvases() {
-    return Object.fromEntries(
-      SIZE_PRESETS.map((size) => [size.id, this.querySelector(`canvas[data-size-id="${size.id}"]`)]),
-    );
-  }
-
   async #draw() {
-    const canvases = this.#canvases();
-    if (!this.#post || Object.values(canvases).some((c) => !c)) return;
+    const canvas = this.querySelector("canvas");
+    if (!canvas || !this.#post) return;
 
-    const wrappers = [...this.querySelectorAll(".canvas-wrap")];
-    wrappers.forEach((w) => w.classList.add("is-drawing"));
+    const wrapper = this.querySelector(".canvas-wrap");
+    wrapper.classList.add("is-drawing");
     try {
-      await renderPostCardSizes(canvases, {
-        post: this.#post,
+      // Each half is cached independently: a size switch reuses both, a
+      // background switch reuses the prepared post.
+      this.#prepared ??= await preparePostCard({ post: this.#post });
+      this.#background ??= await resolveBackground({
         backgroundId: this.#backgroundId,
         customBackgroundImage: this.#customBackgroundImage,
       });
-      for (const canvas of Object.values(canvases)) {
-        const option = canvas.closest(".size-option");
-        const size = SIZE_PRESETS.find((s) => s.id === canvas.dataset.sizeId);
-        option.querySelector(".size-option__dims").textContent = `${canvas.width} x ${canvas.height}`;
-        // The dimensions are only known once it is drawn.
-        option.querySelector(".canvas-wrap").setAttribute(
-          "aria-label",
-          `Zoom the ${size?.label ?? canvas.dataset.sizeId} screenshot, ${canvas.width} by ${canvas.height}`,
-        );
-      }
+
+      drawPreparedCard(canvas, this.#prepared, this.#background, this.#sizeId);
+
+      const label = SIZE_PRESETS.find((s) => s.id === this.#sizeId)?.label ?? this.#sizeId;
+      this.querySelector(".size-option__dims").textContent = `${canvas.width} x ${canvas.height}`;
+      wrapper.setAttribute("aria-label", `Zoom the ${label} screenshot, ${canvas.width} by ${canvas.height}`);
+
       this.#drawn = true;
       this.#syncControls();
     } catch (err) {
       this.setError(this.#sourceLine, `Couldn't render this post: ${err.message}`);
       return;
     } finally {
-      wrappers.forEach((w) => w.classList.remove("is-drawing"));
+      wrapper.classList.remove("is-drawing");
     }
   }
 
-  #filename(sizeId) {
-    return screenshotFilename(this.#post?.author?.handle, sizeId, Date.now());
+  #filename() {
+    return screenshotFilename(this.#post?.author?.handle, this.#sizeId, Date.now());
   }
 
-  #download(sizeId) {
+  #download() {
     // The buttons are disabled while covered; this is the backstop.
     if (this.#covered) return;
-    const canvas = this.querySelector(`canvas[data-size-id="${sizeId}"]`);
-    if (canvas) downloadCanvas(canvas, this.#filename(sizeId));
+    const canvas = this.querySelector("canvas");
+    if (canvas) downloadCanvas(canvas, this.#filename());
   }
 
-  #zoom(sizeId) {
+  #zoom() {
     if (this.#covered) return;
-    const canvas = this.querySelector(`canvas[data-size-id="${sizeId}"]`);
+    const canvas = this.querySelector("canvas");
     if (!canvas) return;
-    const label = SIZE_PRESETS.find((s) => s.id === sizeId)?.label ?? sizeId;
-    openImageZoom({ canvas, label, filename: this.#filename(sizeId) });
+    const label = SIZE_PRESETS.find((s) => s.id === this.#sizeId)?.label ?? this.#sizeId;
+    openImageZoom({ canvas, label, filename: this.#filename() });
   }
 
   render() {
@@ -173,26 +192,14 @@ export class PostResultCard extends HTMLElement {
     }
 
     // ready
-    const options = SIZE_PRESETS.map(
+    const tabs = SIZE_PRESETS.map(
       (size) => `
-        <figure class="size-option">
-          <button
-            type="button"
-            class="canvas-wrap"
-            data-size-id="${size.id}"
-            aria-label="Zoom the ${escapeHtml(size.label)} screenshot"
-            disabled
-          >
-            <canvas data-size-id="${size.id}"></canvas>
-          </button>
-          <figcaption class="size-option__caption">
-            <span class="size-option__label">${escapeHtml(size.label)}</span>
-            <span class="size-option__dims"></span>
-          </figcaption>
-          <button type="button" class="download-btn" data-size-id="${size.id}" disabled>
-            Download PNG
-          </button>
-        </figure>`,
+        <button
+          type="button"
+          class="size-tab"
+          data-size-id="${size.id}"
+          aria-pressed="${size.id === this.#sizeId}"
+        >${escapeHtml(size.label)}</button>`,
     ).join("");
 
     const cover = this.#covered
@@ -206,21 +213,27 @@ export class PostResultCard extends HTMLElement {
     this.innerHTML = `
       <div class="result-card result-card--ready">
         <p class="source-line">${escapeHtml(this.#sourceLine)}</p>
+        <div class="size-tabs" role="group" aria-label="Output size">${tabs}</div>
         <div class="covered-area">
-          <div class="size-grid">${options}</div>
+          <figure class="size-option">
+            <button type="button" class="canvas-wrap" disabled>
+              <canvas></canvas>
+            </button>
+            <figcaption class="size-option__caption">
+              <span class="size-option__dims"></span>
+            </figcaption>
+          </figure>
           ${cover}
         </div>
+        <button type="button" class="download-btn" disabled>Download PNG</button>
       </div>`;
 
+    this.querySelectorAll(".size-tab").forEach((btn) => {
+      btn.addEventListener("click", () => this.#setSize(btn.dataset.sizeId));
+    });
+    this.querySelector(".download-btn").addEventListener("click", () => this.#download());
+    this.querySelector(".canvas-wrap").addEventListener("click", () => this.#zoom());
     this.querySelector(".content-cover__dismiss")?.addEventListener("click", () => this.#dismissCover());
-
-    this.querySelectorAll(".download-btn").forEach((btn) => {
-      btn.addEventListener("click", () => this.#download(btn.dataset.sizeId));
-    });
-
-    this.querySelectorAll(".canvas-wrap").forEach((btn) => {
-      btn.addEventListener("click", () => this.#zoom(btn.dataset.sizeId));
-    });
   }
 }
 

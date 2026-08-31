@@ -5,10 +5,15 @@ import { SIZE_PRESETS, fitCardTransform, CARD_WIDTH, OUTER_PAD } from "../public
 
 const square = SIZE_PRESETS.find((s) => s.id === "square");
 const original = SIZE_PRESETS.find((s) => s.id === "original");
+const wide = SIZE_PRESETS.find((s) => s.id === "wide");
 
-test("Original is the first size and Square is 1:1", () => {
-  assert.equal(SIZE_PRESETS[0].id, "original");
-  assert.equal(square.width, square.height);
+test("the three sizes are Original, Square and 16:9, in that order", () => {
+  assert.deepEqual(SIZE_PRESETS.map((s) => s.id), ["original", "square", "wide"]);
+  assert.equal(square.width, square.height, "Square should be 1:1");
+  assert.ok(
+    Math.abs(wide.width / wide.height - 16 / 9) < 1e-9,
+    `16:9 preset is ${wide.width}x${wide.height}, ratio ${wide.width / wide.height}`,
+  );
 });
 
 test("Original keeps today's framing: full width, fixed padding, no scaling", () => {
@@ -42,15 +47,21 @@ test("the card is never scaled up past 1:1", () => {
   }
 });
 
-test("a frame wider than the card does not blow the card up to fill it", () => {
-  // Nothing ships at this size yet. It is here because the square's padded
-  // width happens to equal CARD_WIDTH exactly, so the square alone cannot
-  // tell whether the no-upscale clamp works -- and the next size preset
-  // added may well be wider than the card.
-  const wide = { id: "wide", label: "Wide", width: 1920, height: 1080 };
+test("the 16:9 frame is wider than the card and must not blow it up", () => {
+  // The square's padded width happens to equal CARD_WIDTH exactly, so the
+  // square alone cannot tell whether the no-upscale clamp works. 16:9 is
+  // genuinely wider than the card, so it can.
   const t = fitCardTransform(400, wide);
   assert.equal(t.scale, 1, "a small card in a big frame should stay at 1:1");
-  assert.equal(t.x, (1920 - CARD_WIDTH) / 2, "and be centered, not stretched");
+  assert.equal(t.x, (wide.width - CARD_WIDTH) / 2, "and be centered, not stretched");
+});
+
+test("a card too tall for the 16:9 frame scales down to fit it", () => {
+  const t = fitCardTransform(1500, wide);
+  const availH = wide.height - OUTER_PAD * 2;
+  assert.equal(t.scale, availH / 1500);
+  assert.ok(t.y >= OUTER_PAD - 1e-9, "should keep its padding");
+  assert.ok(t.x + CARD_WIDTH * t.scale <= wide.width + 1e-9, "should stay inside the frame");
 });
 
 test("the card always stays inside the square, at every height", () => {

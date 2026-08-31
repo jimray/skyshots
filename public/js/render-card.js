@@ -9,6 +9,22 @@ const BORDER = "#e1e8ed";
 
 export const BACKGROUND_PRESETS = [
   {
+    id: "clouds-light",
+    label: "Clouds",
+    swatch: "url(/img/clouds-light.png) center/cover",
+    src: "/img/clouds-light.png",
+    // Sampled from the image's own top row. If the file is replaced, re-sample:
+    // this is what fills the frame above the clouds.
+    sky: "#b7ddf2",
+  },
+  {
+    id: "clouds-dark",
+    label: "Night clouds",
+    swatch: "url(/img/clouds-dark.png) center/cover",
+    src: "/img/clouds-dark.png",
+    sky: "#10141d",
+  },
+  {
     id: "sky",
     label: "Bluesky",
     swatch: "linear-gradient(135deg,#8ec5ff,#1185fe)",
@@ -72,7 +88,7 @@ const CARD_PAD = 48;
 export const CARD_WIDTH = CANVAS_WIDTH - OUTER_PAD * 2;
 const CONTENT_WIDTH = CARD_WIDTH - CARD_PAD * 2;
 const AVATAR_SIZE = 64;
-const BODY_FONT_SIZE = 30;
+const BODY_FONT_SIZE = 31;
 const BODY_LINE_HEIGHT = BODY_FONT_SIZE * 1.42;
 
 /**
@@ -82,6 +98,10 @@ const BODY_LINE_HEIGHT = BODY_FONT_SIZE * 1.42;
 export const SIZE_PRESETS = [
   { id: "original", label: "Original" },
   { id: "square", label: "Square", width: 1200, height: 1200 },
+  // 1920x1080 rather than 1200x675: a 675-tall frame leaves only 531px of
+  // padded height, which would shrink almost every card. At 1080 the card
+  // fits at 1:1 unless it is taller than 936.
+  { id: "wide", label: "16:9", width: 1920, height: 1080 },
 ];
 
 /**
@@ -99,6 +119,27 @@ export const SIZE_PRESETS = [
  * @param {object} size        A SIZE_PRESETS entry.
  * @returns {{width: number, height: number, scale: number, x: number, y: number}}
  */
+/**
+ * Places a background image in a frame: scaled to the frame's width, with the
+ * bottom edge of the image on the bottom edge of the frame.
+ *
+ * Both cloud images are composed as a band of cloud along the bottom under an
+ * almost flat sky, so pinning the bottom keeps the composition and the space
+ * left above can simply be filled with the sky colour -- no cropping
+ * sideways, no distortion, at any aspect ratio.
+ *
+ * When the image is proportionally taller than the frame it overflows off the
+ * top instead, and there is no sky left to fill.
+ *
+ * @returns {{x: number, y: number, width: number, height: number, skyHeight: number}}
+ *   `skyHeight` is the band at the top of the frame the image does not reach.
+ */
+export function backgroundImageLayout(imgWidth, imgHeight, canvasWidth, canvasHeight) {
+  const height = imgHeight * (canvasWidth / imgWidth);
+  const y = canvasHeight - height;
+  return { x: 0, y, width: canvasWidth, height, skyHeight: Math.max(0, y) };
+}
+
 export function fitCardTransform(cardHeight, size) {
   if (!size?.width || !size?.height) {
     return {
@@ -271,24 +312,19 @@ async function loadEmbedMedia(embed) {
 /**
  * Loads every image the card needs and measures the layout.
  *
- * Nothing here depends on the output size, so one prepare feeds any number of
- * size presets -- which is what stops a two-size result from fetching each
- * avatar and embed image twice.
+ * Nothing here depends on the output size or the chosen background, so one
+ * prepare feeds every size and every background: switching either is a redraw
+ * with no network at all.
  *
  * @returns {{cardHeight: number, imageCount: number,
- *            paintBackground: (ctx: CanvasRenderingContext2D, width: number, height: number) => void,
  *            drawCard: (ctx: CanvasRenderingContext2D) => void}}
  *   `drawCard` paints the card at the origin, at its natural size.
  */
-export async function preparePostCard({ post, backgroundId, customBackgroundImage }) {
+export async function preparePostCard({ post }) {
   const record = post.record ?? {};
   const author = post.author ?? {};
 
-  const [avatarImg, embed, customBg] = await Promise.all([
-    loadRemoteImage(author.avatar),
-    resolveEmbed(post),
-    customBackgroundImage ? loadImage(customBackgroundImage) : Promise.resolve(null),
-  ]);
+  const [avatarImg, embed] = await Promise.all([loadRemoteImage(author.avatar), resolveEmbed(post)]);
 
   // Embed media is loaded here rather than mid-draw, so drawing stays
   // synchronous and can be repeated per size without refetching.
@@ -339,19 +375,6 @@ export async function preparePostCard({ post, backgroundId, customBackgroundImag
     32 +
     footerHeight +
     CARD_PAD;
-
-  function paintBackground(ctx, width, height) {
-    // --- Background ---
-    if (customBg) {
-      ctx.filter = "blur(6px) brightness(0.85)";
-      drawImageCover(ctx, customBg, -20, -20, width + 40, height + 40);
-      ctx.filter = "none";
-    } else {
-      const preset = BACKGROUND_PRESETS.find((p) => p.id === backgroundId) ?? BACKGROUND_PRESETS[0];
-      ctx.fillStyle = preset.paint(ctx, width, height);
-      ctx.fillRect(0, 0, width, height);
-    }
-  }
 
   function drawCard(ctx) {
     // The card is drawn at the origin at its natural size; the caller's
@@ -486,11 +509,80 @@ export async function preparePostCard({ post, backgroundId, customBackgroundImag
     }
   }
 
-  return { cardHeight, imageCount: media.images.length, paintBackground, drawCard };
+  return { cardHeight, imageCount: media.images.length, drawCard };
 }
 
-/** Sizes `canvas` for one size preset and draws a prepared card into it. */
-function drawPreparedCard(canvas, prepared, sizeId) {
+const backgroundImageCache = new Map();
+
+/**
+ * Loads a preset background image once per page, however many results are on
+ * it. A failure is cached as null rather than as a rejected promise.
+ */
+function loadBackgroundImage(src) {
+  if (!backgroundImageCache.has(src)) {
+    backgroundImageCache.set(src, loadImage(src).catch(() => null));
+  }
+  return backgroundImageCache.get(src);
+}
+
+/**
+ * Loads whatever the chosen background needs and returns something that can
+ * paint it at any size.
+ *
+ * Kept separate from preparePostCard so that changing background does not
+ * re-fetch the post's avatar and embeds, and changing size does not re-fetch
+ * the background. Preset images are cached for the life of the page.
+ *
+ * @returns {{paint: (ctx: CanvasRenderingContext2D, width: number, height: number) => void}}
+ */
+export async function resolveBackground({ backgroundId, customBackgroundImage }) {
+  if (customBackgroundImage) {
+    const img = await loadImage(customBackgroundImage);
+    return {
+      paint(ctx, width, height) {
+        // An arbitrary photo is blurred and dimmed so the card stays readable.
+        ctx.filter = "blur(6px) brightness(0.85)";
+        drawImageCover(ctx, img, -20, -20, width + 40, height + 40);
+        ctx.filter = "none";
+      },
+    };
+  }
+
+  const preset = BACKGROUND_PRESETS.find((p) => p.id === backgroundId) ?? BACKGROUND_PRESETS[0];
+
+  if (preset.src) {
+    const img = await loadBackgroundImage(preset.src);
+    return {
+      paint(ctx, width, height) {
+        // The sky goes down first, so the band above the clouds is covered
+        // even if the image is missing.
+        ctx.fillStyle = preset.sky;
+        ctx.fillRect(0, 0, width, height);
+        if (!img) return;
+        const l = backgroundImageLayout(img.naturalWidth, img.naturalHeight, width, height);
+        ctx.drawImage(img, l.x, l.y, l.width, l.height);
+      },
+    };
+  }
+
+  return {
+    paint(ctx, width, height) {
+      ctx.fillStyle = preset.paint(ctx, width, height);
+      ctx.fillRect(0, 0, width, height);
+    },
+  };
+}
+
+/**
+ * Sizes `canvas` for one size preset and draws a prepared card on a resolved
+ * background. Synchronous: everything it needs is already loaded.
+ *
+ * @param {HTMLCanvasElement} canvas
+ * @param {object} prepared    From preparePostCard.
+ * @param {object} background  From resolveBackground.
+ * @param {string} sizeId      A SIZE_PRESETS id.
+ */
+export function drawPreparedCard(canvas, prepared, background, sizeId) {
   const size = SIZE_PRESETS.find((s) => s.id === sizeId) ?? SIZE_PRESETS[0];
   const placement = fitCardTransform(prepared.cardHeight, size);
 
@@ -498,7 +590,7 @@ function drawPreparedCard(canvas, prepared, sizeId) {
   canvas.height = placement.height;
   const ctx = canvas.getContext("2d");
 
-  prepared.paintBackground(ctx, placement.width, placement.height);
+  background.paint(ctx, placement.width, placement.height);
 
   ctx.save();
   ctx.translate(placement.x, placement.y);
@@ -507,22 +599,6 @@ function drawPreparedCard(canvas, prepared, sizeId) {
   ctx.restore();
 
   return placement;
-}
-
-/**
- * Renders `post` onto one canvas per size, preparing the post only once.
- * Returns the number of embed images drawn.
- *
- * For a single size, pass a single entry: `{ original: canvas }`.
- *
- * @param {Record<string, HTMLCanvasElement>} canvasesBySizeId  Keyed by SIZE_PRESETS id.
- */
-export async function renderPostCardSizes(canvasesBySizeId, { post, backgroundId, customBackgroundImage }) {
-  const prepared = await preparePostCard({ post, backgroundId, customBackgroundImage });
-  for (const [sizeId, canvas] of Object.entries(canvasesBySizeId)) {
-    if (canvas) drawPreparedCard(canvas, prepared, sizeId);
-  }
-  return prepared.imageCount;
 }
 
 function imagesGridHeight(count, width) {

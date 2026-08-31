@@ -217,12 +217,39 @@ button[type="submit"]:disabled {
   line-height: 1.5;
 }
 
-/* One column per output size, side by side until the viewport is too narrow. */
-.size-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 20px;
-  align-items: start;
+/* Output size selector, above the single preview. */
+.size-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.size-tab {
+  padding: 5px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.size-tab:hover {
+  border-color: var(--brand);
+  color: var(--brand);
+}
+
+.size-tab[aria-pressed="true"] {
+  border-color: var(--brand);
+  background: var(--brand);
+  color: #fff;
+}
+
+.size-tab:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
 }
 
 .size-option {
@@ -238,10 +265,6 @@ button[type="submit"]:disabled {
   gap: 8px;
   margin-top: 10px;
   font-size: 0.8rem;
-}
-
-.size-option__label {
-  font-weight: 600;
 }
 
 .size-option__dims {

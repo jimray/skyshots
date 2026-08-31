@@ -191,11 +191,79 @@ button[type="submit"]:disabled {
   padding: 18px;
 }
 
+/* Kept for states with no canonical URL to show: parse errors, missing posts. */
 .source-line {
   margin: 0 0 10px;
   font-size: 0.8rem;
   color: var(--text-muted);
   word-break: break-all;
+}
+
+.post-url {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.post-url__link {
+  min-width: 0;
+  flex: 1 1 auto;
+  color: var(--text);
+  font-size: 1rem;
+  font-weight: 600;
+  text-decoration-color: var(--border);
+  text-underline-offset: 3px;
+  word-break: break-all;
+}
+
+.post-url__link:hover {
+  color: var(--brand);
+  text-decoration-color: currentColor;
+}
+
+.copy-btn {
+  flex: 0 0 auto;
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.copy-btn:hover {
+  border-color: var(--brand);
+  color: var(--brand);
+}
+
+.copy-btn.is-copied {
+  border-color: var(--brand);
+  background: var(--brand);
+  color: #fff;
+}
+
+.copy-btn:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Per-post background picker sits tighter than the form one did. */
+.card-bg-picker {
+  display: block;
+  margin-bottom: 14px;
 }
 
 .status {
@@ -217,12 +285,42 @@ button[type="submit"]:disabled {
   line-height: 1.5;
 }
 
-/* Output size selector, above the single preview. */
+/* The size rail runs down the left of the preview. */
+.preview-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
 .size-tabs {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  flex: 0 0 auto;
   gap: 6px;
-  margin-bottom: 12px;
+}
+
+.size-tabs .size-tab {
+  width: 100%;
+  text-align: center;
+}
+
+/* Under this width the rail costs more than it gives, so it lies flat. */
+@media (max-width: 700px) {
+  .preview-row {
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .size-tabs {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-self: stretch;
+  }
+
+  /* Full width is for the vertical rail; in a row it would stack them again. */
+  .size-tabs .size-tab {
+    width: auto;
+  }
 }
 
 .size-tab {
@@ -326,19 +424,24 @@ button[type="submit"]:disabled {
    previews underneath are rendered, so this is a gate rather than a redaction:
    downloading and zooming are disabled until it is dismissed. */
 /* The preview is capped well below the column width -- at full width it
-   dominates the page, and the exported PNG is unaffected either way. Capping
-   the whole area rather than just the canvas keeps the opt-out cover, which is
-   positioned against this box, aligned with the image. */
-.covered-area {
-  position: relative;
+   dominates the page, and the exported PNG is unaffected either way. The cap is
+   on the column rather than the canvas so the opt-out cover, which is
+   positioned against .covered-area, stays aligned with the image. */
+.preview-col {
+  min-width: 0;
+  flex: 1 1 auto;
   max-width: 60%;
 }
 
-/* Below this the column is narrow enough that 60% would be too small to read. */
+/* Below this the column is narrow enough that a cap would be too small to read. */
 @media (max-width: 700px) {
-  .covered-area {
+  .preview-col {
     max-width: 100%;
   }
+}
+
+.covered-area {
+  position: relative;
 }
 
 .content-cover {

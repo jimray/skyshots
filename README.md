@@ -58,15 +58,24 @@ rather than by live data.
   true aspect ratio, however tall that is, so squarish and portrait images are
   shown whole rather than cropped into a landscape box; multi-image grids stay
   fixed-height cropped tiles, as they are in the Bluesky app.
-- **Backgrounds**: two cloud photographs (light is the default, dark second)
-  and five gradients, or upload your own image. Uploads are blurred and dimmed
+- **Backgrounds**: chosen per post -- each result carries its own picker, so
+  several posts in one batch can take different backgrounds. Two cloud
+  photographs (light is the default, dark second) and five gradients, or upload
+  your own image. Uploads are blurred and dimmed
   so the card stays readable; the built-in cloud images are not, since they are
   designed as backdrops. Both cloud images are composed as a band of cloud
   under a nearly flat sky, so they are scaled to the frame width with the
   bottom edge pinned and the space above filled with a sky colour sampled from
   the image itself (`backgroundImageLayout` in `render-card.js`). That fits any
   aspect ratio with no cropping or distortion.
-- **Sizes**: each result has buttons to switch output size -- **Original**
+- **The post URL** is shown as a link to the post, with a one-click Copy
+  button. Copy always yields the canonical
+  `https://bsky.app/profile/<handle>/post/<rkey>`, built from the resolved post
+  rather than echoed from the input, so an `at://` URI comes back as something
+  shareable. An unresolvable handle falls back to the DID, which still resolves
+  on bsky.app.
+- **Sizes**: a rail down the left of each preview switches output size --
+  **Original**
   (1200 wide, grows to fit the post), **Square** (1200x1200) for Instagram,
   and **16:9** (1920x1080). The card is drawn at its natural size and fitted
   into the chosen frame, scaling down only when it is too tall, never up.
@@ -123,9 +132,12 @@ background, and click **Generate screenshots**. Each result gets its own
 
 `npm test` runs the unit tests (`node --test`, no dependencies): background
 preset order and hues, the size-fitting and background-image geometry,
-icon/logo placement, download filenames, and the opt-out logic (with `fetch`
-stubbed: record present/absent/unreadable, DID deduplication, and which signal
-wins). Canvas is absent in Node, so the icon tests stub `Path2D`
+icon/logo placement, download filenames, canonical post URLs, and the opt-out
+logic (with `fetch` stubbed: record present/absent/unreadable, DID
+deduplication, and which signal wins).
+
+`parsePostReference` -- the input parser -- has no tests yet, which is the
+largest untested piece of logic left. Canvas is absent in Node, so the icon tests stub `Path2D`
 and record the context calls.
 
 The zoom overlay has no unit test: its behaviour is `<dialog>` and CSS, which

@@ -192,6 +192,29 @@ export function restrictionFor(post, hiddenFromRecommendations) {
   return null;
 }
 
+// The AppView returns this in place of a handle it cannot resolve. Putting it
+// in a profile URL would produce a link that 404s.
+const UNRESOLVED_HANDLE = "handle.invalid";
+const POST_URI = /^at:\/\/([^/]+)\/app\.bsky\.feed\.post\/([^/?#]+)$/;
+
+/**
+ * The canonical bsky.app link for a post, built from its AT-URI.
+ *
+ * Preferring the handle keeps the link readable; the DID is used when the
+ * handle is missing or unresolvable, which still resolves on bsky.app.
+ *
+ * @param {object} post  A post view.
+ * @returns {string|null} null when there is no valid post URI to build from.
+ */
+export function postUrl(post) {
+  const match = POST_URI.exec(post?.uri ?? "");
+  if (!match) return null;
+  const [, did, rkey] = match;
+  const handle = post?.author?.handle;
+  const actor = handle && handle !== UNRESOLVED_HANDLE ? handle : did;
+  return `https://bsky.app/profile/${actor}/post/${rkey}`;
+}
+
 export function proxiedImageUrl(originalUrl) {
   return `/api/image?url=${encodeURIComponent(originalUrl)}`;
 }

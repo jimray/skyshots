@@ -6,7 +6,9 @@ import {
   drawPreparedCard,
 } from "../render-card.js";
 import { downloadCanvas, screenshotFilename } from "../download-canvas.js";
+import { postUrl } from "../atproto.js";
 import { openImageZoom } from "./image-zoom.js";
+import "./background-picker.js";
 
 /**
  * <post-result-card> owns the lifecycle for a single input line: shows a
@@ -14,8 +16,9 @@ import { openImageZoom } from "./image-zoom.js";
  * output size, downloadable, and clickable to zoom -- or an error explanation
  * (parse failure or post not found).
  *
- * The post and the background are prepared once and cached, so switching size
- * is a redraw with no network, and switching background reloads only the
+ * Each card carries its own background picker, so a background is chosen per
+ * post. The post and the background are prepared once and cached, so switching
+ * size is a redraw with no network, and switching background reloads only the
  * background.
  *
  * When the author has asked not to be shown, the previews are still rendered
@@ -35,6 +38,7 @@ export class PostResultCard extends HTMLElement {
   #coverDismissed = false;
   #drawn = false;
   #sizeId = SIZE_PRESETS[0].id;
+  #copyResetTimer = null;
   #prepared = null;
   #background = null;
   #message = "";
@@ -55,12 +59,6 @@ export class PostResultCard extends HTMLElement {
     this.#status = "error";
     this.#message = message;
     this.render();
-  }
-
-  /** Sets the background to use for the next draw without triggering a redraw itself. */
-  primeBackground(backgroundId, customBackgroundImage) {
-    this.#backgroundId = backgroundId;
-    this.#customBackgroundImage = customBackgroundImage;
   }
 
   /**
@@ -153,6 +151,29 @@ export class PostResultCard extends HTMLElement {
     }
   }
 
+  async #copyUrl() {
+    const url = postUrl(this.#post);
+    if (!url) return;
+    const btn = this.querySelector(".copy-btn");
+    const status = this.querySelector(".post-url [role='status']");
+    try {
+      await writeToClipboard(url);
+      btn.textContent = "Copied";
+      btn.classList.add("is-copied");
+      // The button's own label change is not reliably announced, so say it here.
+      status.textContent = `Copied ${url} to the clipboard`;
+    } catch {
+      btn.textContent = "Copy failed";
+      status.textContent = "Could not copy the URL to the clipboard";
+    }
+    clearTimeout(this.#copyResetTimer);
+    this.#copyResetTimer = setTimeout(() => {
+      btn.textContent = "Copy";
+      btn.classList.remove("is-copied");
+      status.textContent = "";
+    }, 1600);
+  }
+
   #filename() {
     return screenshotFilename(this.#post?.author?.handle, this.#sizeId, Date.now());
   }
@@ -192,6 +213,8 @@ export class PostResultCard extends HTMLElement {
     }
 
     // ready
+    const url = postUrl(this.#post);
+
     const tabs = SIZE_PRESETS.map(
       (size) => `
         <button
@@ -210,20 +233,37 @@ export class PostResultCard extends HTMLElement {
         </div>`
       : "";
 
+    // With no canonical URL to build there is nothing to link or copy, so fall
+    // back to showing the line as it was typed.
+    const header = url
+      ? `
+        <div class="post-url">
+          <a class="post-url__link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer"
+            >${escapeHtml(url.replace(/^https:\/\//, ""))}</a>
+          <button type="button" class="copy-btn" aria-label="Copy the post URL">Copy</button>
+          <span class="visually-hidden" role="status" aria-live="polite"></span>
+        </div>`
+      : `<p class="source-line">${escapeHtml(this.#sourceLine)}</p>`;
+
     this.innerHTML = `
       <div class="result-card result-card--ready">
-        <p class="source-line">${escapeHtml(this.#sourceLine)}</p>
-        <div class="size-tabs" role="group" aria-label="Output size">${tabs}</div>
-        <div class="covered-area">
-          <figure class="size-option">
-            <button type="button" class="canvas-wrap" disabled>
-              <canvas></canvas>
-            </button>
-            <figcaption class="size-option__caption">
-              <span class="size-option__dims"></span>
-            </figcaption>
-          </figure>
-          ${cover}
+        ${header}
+        <background-picker class="card-bg-picker"></background-picker>
+        <div class="preview-row">
+          <div class="size-tabs" role="group" aria-label="Output size">${tabs}</div>
+          <div class="preview-col">
+            <div class="covered-area">
+              <figure class="size-option">
+                <button type="button" class="canvas-wrap" disabled>
+                  <canvas></canvas>
+                </button>
+                <figcaption class="size-option__caption">
+                  <span class="size-option__dims"></span>
+                </figcaption>
+              </figure>
+              ${cover}
+            </div>
+          </div>
         </div>
         <button type="button" class="download-btn" disabled>Download PNG</button>
       </div>`;
@@ -233,7 +273,36 @@ export class PostResultCard extends HTMLElement {
     });
     this.querySelector(".download-btn").addEventListener("click", () => this.#download());
     this.querySelector(".canvas-wrap").addEventListener("click", () => this.#zoom());
+    this.querySelector(".copy-btn")?.addEventListener("click", () => this.#copyUrl());
+    this.querySelector("background-picker").addEventListener("bg-change", (e) => {
+      e.stopPropagation();
+      this.setBackground(e.detail.backgroundId, e.detail.customBackgroundImage);
+    });
     this.querySelector(".content-cover__dismiss")?.addEventListener("click", () => this.#dismissCover());
+  }
+}
+
+/**
+ * Copies text, preferring the async clipboard API and falling back to a
+ * throwaway textarea where that is unavailable (a page served over plain HTTP
+ * from anything other than localhost).
+ */
+async function writeToClipboard(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const scratch = document.createElement("textarea");
+  scratch.value = text;
+  scratch.setAttribute("readonly", "");
+  scratch.style.position = "fixed";
+  scratch.style.opacity = "0";
+  document.body.append(scratch);
+  scratch.select();
+  try {
+    if (!document.execCommand("copy")) throw new Error("copy rejected");
+  } finally {
+    scratch.remove();
   }
 }
 

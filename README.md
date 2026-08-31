@@ -137,7 +137,18 @@ logic (with `fetch` stubbed: record present/absent/unreadable, DID
 deduplication, and which signal wins).
 
 `parsePostReference` -- the input parser -- has no tests yet, which is the
-largest untested piece of logic left. Canvas is absent in Node, so the icon tests stub `Path2D`
+largest untested piece of logic left.
+
+## A note on caching
+
+There is no build step and so no content-hashed filenames. index.html and the
+modules have to move together -- the HTML says which elements exist and
+main.js reaches for them while loading -- so code and markup are always served
+`no-cache`, and only images are allowed to sit in the browser cache. Getting
+this wrong once produced a page that silently did nothing: a cached old
+main.js threw on an element the new HTML no longer had, so its submit listener
+was never attached and the form fell through to a native GET. See
+`cache-policy.js`. Canvas is absent in Node, so the icon tests stub `Path2D`
 and record the context calls.
 
 The zoom overlay has no unit test: its behaviour is `<dialog>` and CSS, which

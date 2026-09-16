@@ -2,7 +2,7 @@
 
 A small web app that turns a list of Bluesky post links into shareable
 screenshot images — a Bluesky-style post card rendered on a decorative
-background, exported as a PNG. 
+background, exported as a PNG.
 
 It checks two separate signals that an author would rather not be shown. If
 either applies, the screenshots are still rendered but sit behind a

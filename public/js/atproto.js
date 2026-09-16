@@ -192,6 +192,23 @@ export function restrictionFor(post, hiddenFromRecommendations) {
   return null;
 }
 
+/**
+ * Which verification badge, if any, an author has earned.
+ *
+ * The post view carries this already, so nothing extra is fetched. Only the
+ * account's own `verifiedStatus` counts: `trustedVerifierStatus` marks an
+ * account that issues verifications to others, which the app marks with a
+ * differently shaped badge this tool does not draw. Anything other than a
+ * literal "valid" -- "none", "invalid", a value added to the lexicon later, or
+ * no verification object at all -- means no badge.
+ *
+ * @param {object} author  A post view's author.
+ * @returns {"verified"|null}
+ */
+export function verificationBadgeFor(author) {
+  return author?.verification?.verifiedStatus === "valid" ? "verified" : null;
+}
+
 // The AppView returns this in place of a handle it cannot resolve. Putting it
 // in a profile URL would produce a link that 404s.
 const UNRESOLVED_HANDLE = "handle.invalid";

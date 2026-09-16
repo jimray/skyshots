@@ -50,7 +50,8 @@ rather than by live data.
   unauthenticated AppView (`public.api.bsky.app`), which already sends
   permissive CORS headers — the browser calls it directly.
 - **Rendering is 100% Canvas 2D**, hand-drawn to look like a Bluesky post:
-  avatar, name/handle, rich text (mentions/links colored using the post's
+  avatar, name/handle, the blue verification check, rich text (mentions/links
+  colored using the post's
   real facets, with correct UTF-8 byte-offset handling), image grids,
   external link cards, video thumbnails with a play badge, quote-post cards
   (which get the same logged-out-visibility check), and a stats row using
@@ -58,6 +59,14 @@ rather than by live data.
   true aspect ratio, however tall that is, so squarish and portrait images are
   shown whole rather than cropped into a landscape box; multi-image grids stay
   fixed-height cropped tiles, as they are in the Bluesky app.
+- **Verification**: a verified account gets the app's blue check after its
+  display name. The post view already carries `author.verification`, so this
+  costs no extra request. Only the account's own `verifiedStatus` earns the
+  check; `trustedVerifierStatus`, which marks an account that verifies others,
+  gets a differently shaped badge in the app that this tool does not draw, so a
+  verifier that is not itself verified (bsky.app, for one) shows no badge.
+  `verificationBadgeFor` in `atproto.js` decides; `verified-badge.js` draws.
+
 - **Backgrounds**: chosen per post -- each result carries its own picker, so
   several posts in one batch can take different backgrounds. Two cloud
   photographs (light is the default, dark second) and five gradients, or upload
@@ -75,16 +84,23 @@ rather than by live data.
   shareable. An unresolvable handle falls back to the DID, which still resolves
   on bsky.app.
 - **Sizes**: a rail down the left of each preview switches output size --
-  **Original**
-  (1200 wide, grows to fit the post), **Square** (1200x1200) for Instagram,
-  and **16:9** (1920x1080). The card is drawn at its natural size and fitted
-  into the chosen frame, scaling down only when it is too tall, never up.
-  Sizes are a data list (`SIZE_PRESETS` in `render-card.js`), so another frame
-  is one entry.
+  **16:9** (1920x1080), **Original** (1200 wide, grows to fit the post), and
+  **Square** (1200x1200) for Instagram. The card is drawn at its natural size
+  and fitted into the chosen frame: it is scaled until it touches the padding
+  on whichever axis runs out first, then centered. Sizes are a data list
+  (`SIZE_PRESETS` in `render-card.js`), so another frame is one entry, and the
+  first entry is the default a result opens on.
 
   16:9 is 1920x1080 rather than 1200x675 because a 675-tall frame leaves only
-  531px of padded height, which would shrink almost every card; at 1080 the
-  card sits at 1:1 unless it is taller than 936.
+  531px of padded height, which would shrink almost every card.
+
+  Fitting scales up as well as down, which matters only for 16:9. The square's
+  padded width is exactly the card width, so there a card is never enlarged and
+  one that fits is left at 1:1. The 16:9 frame is much wider than the card, so
+  a card up to 557 tall -- most posts -- grows to fill the padded width rather
+  than floating in the middle of the frame. Taller cards are limited by the
+  1080px height instead, and a portrait card still leaves side margins; that is
+  what 16:9 does to a tall card.
 
   Rendering is split three ways so switching is cheap: `preparePostCard` loads
   the post's images and measures the layout, `resolveBackground` loads the

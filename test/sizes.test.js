@@ -7,13 +7,17 @@ const square = SIZE_PRESETS.find((s) => s.id === "square");
 const original = SIZE_PRESETS.find((s) => s.id === "original");
 const wide = SIZE_PRESETS.find((s) => s.id === "wide");
 
-test("the three sizes are Original, Square and 16:9, in that order", () => {
-  assert.deepEqual(SIZE_PRESETS.map((s) => s.id), ["original", "square", "wide"]);
+test("the three sizes are 16:9, Original and Square, in that order", () => {
+  assert.deepEqual(SIZE_PRESETS.map((s) => s.id), ["wide", "original", "square"]);
   assert.equal(square.width, square.height, "Square should be 1:1");
   assert.ok(
     Math.abs(wide.width / wide.height - 16 / 9) < 1e-9,
     `16:9 preset is ${wide.width}x${wide.height}, ratio ${wide.width / wide.height}`,
   );
+});
+
+test("16:9 is the default: every card opens on the first preset", () => {
+  assert.equal(SIZE_PRESETS[0].id, "wide", "post-result-card and drawPreparedCard both default to SIZE_PRESETS[0]");
 });
 
 test("Original keeps today's framing: full width, fixed padding, no scaling", () => {
@@ -41,19 +45,37 @@ test("a card taller than the square is scaled down to fit and centered", () => {
   assert.equal(t.x, (1200 - CARD_WIDTH * t.scale) / 2);
 });
 
-test("the card is never scaled up past 1:1", () => {
+test("the square never scales a card up: its padded width is exactly the card width", () => {
   for (const cardHeight of [10, 100, 500, 1055, 1056]) {
     assert.equal(fitCardTransform(cardHeight, square).scale, 1, `height ${cardHeight}`);
   }
 });
 
-test("the 16:9 frame is wider than the card and must not blow it up", () => {
-  // The square's padded width happens to equal CARD_WIDTH exactly, so the
-  // square alone cannot tell whether the no-upscale clamp works. 16:9 is
-  // genuinely wider than the card, so it can.
+test("a short card grows to fill the width of the 16:9 frame", () => {
   const t = fitCardTransform(400, wide);
-  assert.equal(t.scale, 1, "a small card in a big frame should stay at 1:1");
-  assert.equal(t.x, (wide.width - CARD_WIDTH) / 2, "and be centered, not stretched");
+  const availW = wide.width - OUTER_PAD * 2;
+  assert.equal(t.scale, availW / CARD_WIDTH, "width is the limit for a short card");
+  assert.equal(Math.round(CARD_WIDTH * t.scale), availW, "scaled width should fill the padded box");
+  assert.equal(t.x, OUTER_PAD, "filling the width means it lands on the padding");
+  assert.equal(t.y, (wide.height - 400 * t.scale) / 2, "and stays centered vertically");
+});
+
+test("the 16:9 card touches the padding on one axis at every height, and stays inside on the other", () => {
+  const availW = wide.width - OUTER_PAD * 2;
+  const availH = wide.height - OUTER_PAD * 2;
+  for (let cardHeight = 100; cardHeight <= 4000; cardHeight += 100) {
+    const t = fitCardTransform(cardHeight, wide);
+    const w = CARD_WIDTH * t.scale;
+    const h = cardHeight * t.scale;
+    assert.ok(w <= availW + 0.001, `height ${cardHeight}: card is wider than the padded frame`);
+    assert.ok(h <= availH + 0.001, `height ${cardHeight}: card is taller than the padded frame`);
+    assert.ok(
+      Math.abs(w - availW) < 0.001 || Math.abs(h - availH) < 0.001,
+      `height ${cardHeight}: card fills neither axis (${w}x${h} in ${availW}x${availH})`,
+    );
+    assert.ok(t.x >= OUTER_PAD - 0.001, `height ${cardHeight}: x ${t.x} inside the padding`);
+    assert.ok(t.y >= OUTER_PAD - 0.001, `height ${cardHeight}: y ${t.y} inside the padding`);
+  }
 });
 
 test("a card too tall for the 16:9 frame scales down to fit it", () => {

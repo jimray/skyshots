@@ -1,4 +1,5 @@
-import { proxiedImageUrl } from "./atproto.js";
+import { proxiedImageUrl, verificationBadgeFor } from "./atproto.js";
+import { drawVerifiedBadge, badgePlacement } from "./verified-badge.js";
 import { drawBlueskyLogo, blueskyLogoWidth } from "./bluesky-logo.js";
 import { drawIcon } from "./bsky-icons.js";
 
@@ -88,20 +89,24 @@ const CARD_PAD = 48;
 export const CARD_WIDTH = CANVAS_WIDTH - OUTER_PAD * 2;
 const CONTENT_WIDTH = CARD_WIDTH - CARD_PAD * 2;
 const AVATAR_SIZE = 64;
+const NAME_FONT_SIZE = 28;
 const BODY_FONT_SIZE = 31;
 const BODY_LINE_HEIGHT = BODY_FONT_SIZE * 1.42;
 
 /**
  * Output sizes offered for every post. "original" grows to fit the content;
  * the others are fixed frames the card is fitted into.
+ *
+ * The first entry is the default: it is what a result opens on, and what an
+ * unknown size id falls back to.
  */
 export const SIZE_PRESETS = [
+  // 1920x1080 rather than 1200x675: a 675-tall frame leaves only 531px of
+  // padded height, which would shrink almost every card. At 1080 a card up to
+  // 557 tall grows to fill the padded width instead.
+  { id: "wide", label: "16:9", width: 1920, height: 1080 },
   { id: "original", label: "Original" },
   { id: "square", label: "Square", width: 1200, height: 1200 },
-  // 1920x1080 rather than 1200x675: a 675-tall frame leaves only 531px of
-  // padded height, which would shrink almost every card. At 1080 the card
-  // fits at 1:1 unless it is taller than 936.
-  { id: "wide", label: "16:9", width: 1920, height: 1080 },
 ];
 
 /**
@@ -111,9 +116,12 @@ export const SIZE_PRESETS = [
  * applies `scale` and `x`/`y` as a canvas transform, so the card-drawing code
  * never needs to know the output size.
  *
- * A fixed-size frame scales the card down until it fits inside the padding,
- * then centers it. It never scales the card up: a card small enough to fit is
- * left at 1:1, which for the square lands it at the same x as "original".
+ * A fixed-size frame scales the card until it touches the padding on whichever
+ * axis runs out first, then centers it. The square's padded width is exactly
+ * CARD_WIDTH, so there a card is only ever scaled down, and one that fits is
+ * left at 1:1 at the same x as "original". The 16:9 frame is much wider than
+ * the card, so there a short card is scaled up to fill the frame instead of
+ * floating in the middle of it.
  *
  * @param {number} cardHeight  Natural height of the card, in pixels.
  * @param {object} size        A SIZE_PRESETS entry.
@@ -152,7 +160,7 @@ export function fitCardTransform(cardHeight, size) {
   }
 
   const { width, height } = size;
-  const scale = Math.min(1, (width - OUTER_PAD * 2) / CARD_WIDTH, (height - OUTER_PAD * 2) / cardHeight);
+  const scale = Math.min((width - OUTER_PAD * 2) / CARD_WIDTH, (height - OUTER_PAD * 2) / cardHeight);
   return {
     width,
     height,
@@ -410,10 +418,23 @@ export async function preparePostCard({ post }) {
     ctx.restore();
 
     const nameX = cx + AVATAR_SIZE + 18;
+    const nameBaseline = cy + 30;
     ctx.textBaseline = "alphabetic";
-    ctx.font = `700 28px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+    ctx.font = `700 ${NAME_FONT_SIZE}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
     ctx.fillStyle = TEXT_DARK;
-    ctx.fillText(author.displayName || author.handle || "unknown", nameX, cy + 30);
+    const name = author.displayName || author.handle || "unknown";
+    ctx.fillText(name, nameX, nameBaseline);
+
+    if (verificationBadgeFor(author)) {
+      const badge = badgePlacement({
+        nameX,
+        nameWidth: ctx.measureText(name).width,
+        baseline: nameBaseline,
+        fontSize: NAME_FONT_SIZE,
+      });
+      drawVerifiedBadge(ctx, badge.x, badge.y, badge.size);
+    }
+
     ctx.font = `400 24px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
     ctx.fillStyle = TEXT_GRAY;
     ctx.fillText(`@${author.handle ?? "unknown"}`, nameX, cy + 58);

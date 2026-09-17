@@ -102,6 +102,26 @@ rather than by live data.
   1080px height instead, and a portrait card still leaves side margins; that is
   what 16:9 does to a tall card.
 
+  Square squares the card itself, not just the frame around it, and it does so
+  by narrowing the card rather than by padding it. A card gets taller as it
+  narrows -- the header and footer are a fixed cost, the body takes more lines
+  -- so `squarestCardWidth` binary-searches between 640px and the full 1056px
+  for the width whose measured height comes closest to that width. Most posts
+  come out square on their own, with no padding at all. The card is then scaled
+  up to fill the frame, so a narrow card means larger text in the output, not
+  smaller.
+
+  The two ends of that search are answers in their own right. A post already
+  taller than the card is wide has nothing to gain from narrowing and keeps the
+  full width. A post too short to reach a square even at 640 stops there, and
+  `cardBox` pads what is left over, split evenly above and below so the post
+  sits in the middle. Nothing is ever cropped or shrunk to force a square.
+
+  Solving this means the same post is laid out at a dozen widths, so measuring
+  had to come out of `preparePostCard`: it now loads the images and returns
+  `layoutAt(cardWidth)`, with layouts cached per width. Loading is still done
+  once per post, so switching size or background still touches no network.
+
   Rendering is split three ways so switching is cheap: `preparePostCard` loads
   the post's images and measures the layout, `resolveBackground` loads the
   background, and `drawPreparedCard` is a synchronous draw. Both halves are

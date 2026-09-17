@@ -87,9 +87,59 @@ export const CANVAS_WIDTH = 1200;
 export const OUTER_PAD = 72;
 const CARD_PAD = 48;
 export const CARD_WIDTH = CANVAS_WIDTH - OUTER_PAD * 2;
-const CONTENT_WIDTH = CARD_WIDTH - CARD_PAD * 2;
+
+/**
+ * The narrowest a card may be laid out at while chasing a square.
+ *
+ * Below this the body is a column of three or four words, and the header --
+ * whose avatar and type are fixed sizes -- starts to dwarf the post it belongs
+ * to. A card this narrow is scaled up 1.65x to fill the square frame, so the
+ * text ends up larger than it is in any other size, not smaller.
+ */
+export const MIN_SQUARE_CARD_WIDTH = 640;
+
+/**
+ * Finds the card width whose laid-out height comes closest to that width.
+ *
+ * A card gets taller as it narrows: the header and footer are a fixed cost and
+ * the body text takes more lines. `heightAt` is therefore a falling function of
+ * width, which is what makes a binary search valid here.
+ *
+ * The two ends are answers in their own right. A post already taller than the
+ * card is wide has nothing to gain from narrowing, so it keeps the full width.
+ * A post too short to ever be square stops at the floor rather than shrinking
+ * the card to nothing chasing a shape it cannot reach; what is left over is
+ * padded by `cardBox`.
+ *
+ * @param {(width: number) => number} heightAt  Lays the card out and returns its height.
+ * @param {{min: number, max: number}} bounds
+ * @returns {number} A whole-pixel card width.
+ */
+export function squarestCardWidth(heightAt, { min, max }) {
+  if (heightAt(max) >= max) return max;
+  if (heightAt(min) <= min) return min;
+
+  // `taller` stays on the side where the card is taller than it is wide,
+  // `wider` on the side where it is not; the answer is between them.
+  let taller = min;
+  let wider = max;
+  for (let i = 0; i < 12; i++) {
+    const mid = Math.round((taller + wider) / 2);
+    if (mid === taller || mid === wider) break;
+    if (heightAt(mid) > mid) taller = mid;
+    else wider = mid;
+  }
+
+  // Line wrapping moves a whole line at a time, so neither bound is likely to
+  // be exactly square. Take whichever is closer.
+  return Math.abs(heightAt(taller) - taller) <= Math.abs(heightAt(wider) - wider) ? taller : wider;
+}
 const AVATAR_SIZE = 64;
 const NAME_FONT_SIZE = 28;
+/** The header band: tall enough for the avatar, with a little air. */
+export const HEADER_HEIGHT = Math.max(AVATAR_SIZE, 66);
+/** The butterfly mark at the right of the header. */
+export const HEADER_LOGO_HEIGHT = 40;
 const BODY_FONT_SIZE = 31;
 const BODY_LINE_HEIGHT = BODY_FONT_SIZE * 1.42;
 
@@ -106,8 +156,35 @@ export const SIZE_PRESETS = [
   // 557 tall grows to fill the padded width instead.
   { id: "wide", label: "16:9", width: 1920, height: 1080 },
   { id: "original", label: "Original" },
-  { id: "square", label: "Square", width: 1200, height: 1200 },
+  // `squareCard` squares the card, not just the frame it sits in: see cardBox.
+  { id: "square", label: "Square", width: 1200, height: 1200, squareCard: true },
 ];
+
+/**
+ * How tall the white card itself is drawn for one size, and how far down its
+ * content starts.
+ *
+ * Normally the card is exactly as tall as its content. A preset marked
+ * `squareCard` pads it out to a square, splitting what it gains evenly above
+ * and below so the post sits in the middle rather than hanging from the top.
+ *
+ * By the time a square card reaches here it has usually been laid out at the
+ * width that makes it nearly square already (`squarestCardWidth`), so there is
+ * little left to pad. What remains is the short post that could not reach a
+ * square even at the narrowest allowed width.
+ *
+ * A card taller than it is wide is left alone: nothing here ever shrinks or
+ * crops content to force a square.
+ *
+ * @param {number} naturalHeight  The card's content height, from its layout.
+ * @param {object} size           A SIZE_PRESETS entry.
+ * @param {number} [cardWidth]    The width it was laid out at.
+ * @returns {{height: number, contentOffset: number}}
+ */
+export function cardBox(naturalHeight, size, cardWidth = CARD_WIDTH) {
+  const height = size?.squareCard ? Math.max(naturalHeight, cardWidth) : naturalHeight;
+  return { height, contentOffset: (height - naturalHeight) / 2 };
+}
 
 /**
  * Works out the canvas dimensions and where the card sits inside them.
@@ -148,10 +225,10 @@ export function backgroundImageLayout(imgWidth, imgHeight, canvasWidth, canvasHe
   return { x: 0, y, width: canvasWidth, height, skyHeight: Math.max(0, y) };
 }
 
-export function fitCardTransform(cardHeight, size) {
+export function fitCardTransform(cardHeight, size, cardWidth = CARD_WIDTH) {
   if (!size?.width || !size?.height) {
     return {
-      width: CANVAS_WIDTH,
+      width: Math.round(cardWidth + OUTER_PAD * 2),
       height: Math.round(cardHeight + OUTER_PAD * 2),
       scale: 1,
       x: OUTER_PAD,
@@ -160,12 +237,12 @@ export function fitCardTransform(cardHeight, size) {
   }
 
   const { width, height } = size;
-  const scale = Math.min((width - OUTER_PAD * 2) / CARD_WIDTH, (height - OUTER_PAD * 2) / cardHeight);
+  const scale = Math.min((width - OUTER_PAD * 2) / cardWidth, (height - OUTER_PAD * 2) / cardHeight);
   return {
     width,
     height,
     scale,
-    x: (width - CARD_WIDTH * scale) / 2,
+    x: (width - cardWidth * scale) / 2,
     y: (height - cardHeight * scale) / 2,
   };
 }
@@ -318,18 +395,19 @@ async function loadEmbedMedia(embed) {
 }
 
 /**
- * Loads every image the card needs and measures the layout.
+ * Loads every image the card needs, and hands back a way to lay it out.
  *
- * Nothing here depends on the output size or the chosen background, so one
- * prepare feeds every size and every background: switching either is a redraw
- * with no network at all.
+ * The loading is what costs anything, and none of it depends on the output
+ * size or the background, so one prepare feeds every size and every
+ * background: switching either is a redraw with no network at all.
  *
- * @returns {{cardHeight: number, imageCount: number,
- *            drawCard: (ctx: CanvasRenderingContext2D) => void}}
- *   `drawCard` paints the card at the origin, at its natural size.
+ * Measuring is separate because the square size lays the same post out at
+ * several widths to find the one that fills a square. That is font metrics
+ * only, and layouts are cached per width.
+ *
+ * @returns {{imageCount: number, layoutAt: (cardWidth: number) => object}}
  */
 export async function preparePostCard({ post }) {
-  const record = post.record ?? {};
   const author = post.author ?? {};
 
   const [avatarImg, embed] = await Promise.all([loadRemoteImage(author.avatar), resolveEmbed(post)]);
@@ -337,29 +415,66 @@ export async function preparePostCard({ post }) {
   // Embed media is loaded here rather than mid-draw, so drawing stays
   // synchronous and can be repeated per size without refetching.
   const media = await loadEmbedMedia(embed);
+  const assets = { avatarImg, embed, media };
+
+  // One layout per width, kept because the square size asks for a dozen of
+  // them while it solves, and a redraw asks for the same one again.
+  const layouts = new Map();
+
+  return {
+    imageCount: media.images.length,
+    /**
+     * Lays the card out at `cardWidth`. Font metrics only -- no network, and
+     * nothing here reloads when the size or background changes.
+     */
+    layoutAt(cardWidth) {
+      const width = Math.round(cardWidth);
+      if (!layouts.has(width)) layouts.set(width, layoutCard(post, assets, width));
+      return layouts.get(width);
+    },
+  };
+}
+
+/**
+ * Measures the card at one width and returns a function that draws it.
+ *
+ * Width is a parameter rather than a constant because the square size narrows
+ * the card until the post fills it; see `squarestCardWidth`.
+ *
+ * @param {object} post
+ * @param {{avatarImg: object, embed: object, media: object}} assets  Already loaded.
+ * @param {number} cardWidth
+ * @returns {{cardWidth: number, cardHeight: number,
+ *            drawCard: (ctx: CanvasRenderingContext2D, box?: object) => void}}
+ */
+function layoutCard(post, assets, cardWidth) {
+  const record = post.record ?? {};
+  const author = post.author ?? {};
+  const { avatarImg, embed, media } = assets;
+  const contentWidth = cardWidth - CARD_PAD * 2;
 
   // --- Measurement pass (font metrics only; independent of canvas size) ---
   const measure = measureCtx();
   measure.font = `400 ${BODY_FONT_SIZE}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
-  const bodyLines = wrapTokens(measure, tokenize(segmentText(record.text ?? "", record.facets)), CONTENT_WIDTH);
+  const bodyLines = wrapTokens(measure, tokenize(segmentText(record.text ?? "", record.facets)), contentWidth);
 
   let quoteLines = [];
   if (embed.quote?.record) {
     measure.font = `400 24px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
-    const quoteWidth = CONTENT_WIDTH - 32;
+    const quoteWidth = contentWidth - 32;
     const quoteText = embed.quote.record.value?.text ?? "";
     quoteLines = wrapTokens(measure, tokenize(segmentText(quoteText.slice(0, 280), [])), quoteWidth);
   }
 
-  const headerHeight = Math.max(AVATAR_SIZE, 66);
+  const headerHeight = HEADER_HEIGHT;
   const textHeight = bodyLines.length * BODY_LINE_HEIGHT;
 
   let mediaHeight = 0;
   const mediaGap = 24;
   if (embed.images?.length) {
-    mediaHeight = imagesGridHeight(embed.images, media.images, CONTENT_WIDTH);
+    mediaHeight = imagesGridHeight(embed.images, media.images, contentWidth);
   } else if (embed.video) {
-    mediaHeight = CONTENT_WIDTH * 0.62;
+    mediaHeight = contentWidth * 0.62;
   } else if (embed.external) {
     mediaHeight = 220;
   }
@@ -384,24 +499,30 @@ export async function preparePostCard({ post }) {
     footerHeight +
     CARD_PAD;
 
-  function drawCard(ctx) {
+  /**
+   * @param {CanvasRenderingContext2D} ctx
+   * @param {{height: number, contentOffset: number}} [box]  From cardBox. The
+   *   default draws the card at its natural height with no offset.
+   */
+  function drawCard(ctx, box = { height: cardHeight, contentOffset: 0 }) {
     // The card is drawn at the origin at its natural size; the caller's
     // transform decides where it lands and how big it ends up.
     const cardX = 0;
     const cardY = 0;
+    const boxHeight = Math.max(box.height, cardHeight);
 
     // --- Card shadow + background ---
     ctx.save();
     ctx.shadowColor = "rgba(0,0,0,0.28)";
     ctx.shadowBlur = 40;
     ctx.shadowOffsetY = 18;
-    roundRectPath(ctx, cardX, cardY, CARD_WIDTH, cardHeight, 28);
+    roundRectPath(ctx, cardX, cardY, cardWidth, boxHeight, 28);
     ctx.fillStyle = "#ffffff";
     ctx.fill();
     ctx.restore();
 
     let cx = cardX + CARD_PAD;
-    let cy = cardY + CARD_PAD;
+    let cy = cardY + CARD_PAD + box.contentOffset;
 
     // --- Header: avatar + name/handle + logo mark ---
     ctx.save();
@@ -439,10 +560,10 @@ export async function preparePostCard({ post }) {
     ctx.fillStyle = TEXT_GRAY;
     ctx.fillText(`@${author.handle ?? "unknown"}`, nameX, cy + 58);
 
-    const logoHeight = 30;
+    const logoHeight = HEADER_LOGO_HEIGHT;
     drawBlueskyLogo(
       ctx,
-      cardX + CARD_WIDTH - CARD_PAD - blueskyLogoWidth(logoHeight),
+      cardX + cardWidth - CARD_PAD - blueskyLogoWidth(logoHeight),
       cy + (headerHeight - logoHeight) / 2,
       logoHeight,
       BRAND_BLUE,
@@ -458,21 +579,21 @@ export async function preparePostCard({ post }) {
     // --- Media ---
     if (embed.images?.length) {
       cy += mediaGap;
-      drawImagesGrid(ctx, media.images, cx, cy, CONTENT_WIDTH, mediaHeight);
+      drawImagesGrid(ctx, media.images, cx, cy, contentWidth, mediaHeight);
       cy += mediaHeight;
     } else if (embed.video) {
       cy += mediaGap;
       const thumb = media.videoThumb;
-      roundRectPath(ctx, cx, cy, CONTENT_WIDTH, mediaHeight, 16);
+      roundRectPath(ctx, cx, cy, contentWidth, mediaHeight, 16);
       ctx.save();
       ctx.clip();
-      if (thumb) drawImageCover(ctx, thumb, cx, cy, CONTENT_WIDTH, mediaHeight);
+      if (thumb) drawImageCover(ctx, thumb, cx, cy, contentWidth, mediaHeight);
       else {
         ctx.fillStyle = "#111418";
-        ctx.fillRect(cx, cy, CONTENT_WIDTH, mediaHeight);
+        ctx.fillRect(cx, cy, contentWidth, mediaHeight);
       }
       ctx.restore();
-      const playCx = cx + CONTENT_WIDTH / 2;
+      const playCx = cx + contentWidth / 2;
       const playCy = cy + mediaHeight / 2;
       ctx.beginPath();
       ctx.arc(playCx, playCy, 44, 0, Math.PI * 2);
@@ -488,14 +609,14 @@ export async function preparePostCard({ post }) {
       cy += mediaHeight;
     } else if (embed.external) {
       cy += mediaGap;
-      drawExternalCard(ctx, embed.external, cx, cy, CONTENT_WIDTH, mediaHeight, media.externalThumb);
+      drawExternalCard(ctx, embed.external, cx, cy, contentWidth, mediaHeight, media.externalThumb);
       cy += mediaHeight;
     }
 
     // --- Quote embed ---
     if (embed.quote) {
       cy += mediaGap;
-      quoteHeight = drawQuote(ctx, embed.quote, cx, cy, CONTENT_WIDTH, quoteLines);
+      quoteHeight = drawQuote(ctx, embed.quote, cx, cy, contentWidth, quoteLines);
       cy += quoteHeight;
     }
 
@@ -511,7 +632,7 @@ export async function preparePostCard({ post }) {
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(cx, cy);
-    ctx.lineTo(cardX + CARD_WIDTH - CARD_PAD, cy);
+    ctx.lineTo(cardX + cardWidth - CARD_PAD, cy);
     ctx.stroke();
     cy += 34;
 
@@ -530,7 +651,7 @@ export async function preparePostCard({ post }) {
     }
   }
 
-  return { cardHeight, imageCount: media.images.length, drawCard };
+  return { cardWidth, cardHeight, drawCard };
 }
 
 const backgroundImageCache = new Map();
@@ -595,6 +716,25 @@ export async function resolveBackground({ backgroundId, customBackgroundImage })
 }
 
 /**
+ * Lays a prepared post out for one size.
+ *
+ * Every size but the square one uses the full card width. The square size
+ * narrows the card until the post fills it, which is what keeps a short post
+ * from becoming a small block of text stranded in a large white square.
+ *
+ * @param {object} prepared  From preparePostCard.
+ * @param {object} size      A SIZE_PRESETS entry.
+ */
+export function layoutForSize(prepared, size) {
+  if (!size?.squareCard) return prepared.layoutAt(CARD_WIDTH);
+  const width = squarestCardWidth((w) => prepared.layoutAt(w).cardHeight, {
+    min: MIN_SQUARE_CARD_WIDTH,
+    max: CARD_WIDTH,
+  });
+  return prepared.layoutAt(width);
+}
+
+/**
  * Sizes `canvas` for one size preset and draws a prepared card on a resolved
  * background. Synchronous: everything it needs is already loaded.
  *
@@ -605,7 +745,9 @@ export async function resolveBackground({ backgroundId, customBackgroundImage })
  */
 export function drawPreparedCard(canvas, prepared, background, sizeId) {
   const size = SIZE_PRESETS.find((s) => s.id === sizeId) ?? SIZE_PRESETS[0];
-  const placement = fitCardTransform(prepared.cardHeight, size);
+  const layout = layoutForSize(prepared, size);
+  const box = cardBox(layout.cardHeight, size, layout.cardWidth);
+  const placement = fitCardTransform(box.height, size, layout.cardWidth);
 
   canvas.width = placement.width;
   canvas.height = placement.height;
@@ -616,7 +758,7 @@ export function drawPreparedCard(canvas, prepared, background, sizeId) {
   ctx.save();
   ctx.translate(placement.x, placement.y);
   ctx.scale(placement.scale, placement.scale);
-  prepared.drawCard(ctx);
+  layout.drawCard(ctx, box);
   ctx.restore();
 
   return placement;

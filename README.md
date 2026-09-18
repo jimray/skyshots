@@ -49,6 +49,13 @@ rather than by live data.
 - **No login required.** Everything is read through Bluesky's public,
   unauthenticated AppView (`public.api.bsky.app`), which already sends
   permissive CORS headers — the browser calls it directly.
+- **Type** is one table, `TYPE` in `render-card.js`: every size the card draws,
+  from the post body down to the domain on a link card. The line heights,
+  baselines and fixed box heights that have to move with them sit beside it,
+  and `test/typography.test.js` checks the text still fits what it is drawn
+  inside -- that the header band holds the name and handle, that a two-line
+  link title stays in its card, that no block sets its lines closer together
+  than the type is tall.
 - **Rendering is 100% Canvas 2D**, hand-drawn to look like a Bluesky post:
   avatar, name/handle, the blue verification check, rich text (mentions/links
   colored using the post's

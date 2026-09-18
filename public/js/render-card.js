@@ -135,13 +135,61 @@ export function squarestCardWidth(heightAt, { min, max }) {
   return Math.abs(heightAt(taller) - taller) <= Math.abs(heightAt(wider) - wider) ? taller : wider;
 }
 const AVATAR_SIZE = 64;
-const NAME_FONT_SIZE = 28;
+/**
+ * Every piece of text on the card, in px.
+ *
+ * These were inline in the drawing code, which made a change like "two pixels
+ * bigger everywhere" a hunt through the file. The heights and baselines below
+ * are the ones that have to move with them; `test/typography.test.js` checks
+ * that the text still fits what it is drawn inside.
+ */
+export const TYPE = {
+  body: 33,
+  name: 30,
+  handle: 26,
+  timestamp: 24,
+  stats: 26,
+  quoteName: 24,
+  quoteHandle: 22,
+  quoteBody: 26,
+  quoteNotice: 24,
+  linkDomain: 22,
+  linkTitle: 26,
+};
+
+const FONT_STACK = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+const font = (weight, size, style = "") => `${style}${weight} ${size}px ${FONT_STACK}`;
+
+/** Baselines inside the header band, measured from the top of the header. */
+export const NAME_BASELINE = 30;
+export const HANDLE_BASELINE = 58;
+
+/** The quoted-post box: line step, and the pill an unavailable quote gets. */
+export const QUOTE_LINE_HEIGHT = 32;
+export const QUOTE_NOTICE_HEIGHT = 68;
+export const QUOTE_NOTICE_BASELINE = 40;
+
+/** The external link card, which is a fixed height whatever the title. */
+export const LINK_CARD_HEIGHT = 220;
+export const LINK_TITLE_LINE_HEIGHT = 32;
+export const LINK_TITLE_BASELINE = 74;
+export const LINK_TITLE_MAX_LINES = 2;
+
+/**
+ * How tall a quoted post's box is for a given number of wrapped lines.
+ *
+ * The measure pass and the draw both need this, and they used to work it out
+ * separately: a change to one moved everything below the quote out of place.
+ */
+export function quoteBoxHeight(lineCount) {
+  return 24 + 40 + lineCount * QUOTE_LINE_HEIGHT + 20;
+}
+
 /** The header band: tall enough for the avatar, with a little air. */
 export const HEADER_HEIGHT = Math.max(AVATAR_SIZE, 66);
 /** The butterfly mark at the right of the header. */
 export const HEADER_LOGO_HEIGHT = 40;
-const BODY_FONT_SIZE = 31;
-const BODY_LINE_HEIGHT = BODY_FONT_SIZE * 1.42;
+export const BODY_LINE_HEIGHT = TYPE.body * 1.42;
 
 /**
  * Output sizes offered for every post. "original" grows to fit the content;
@@ -455,12 +503,12 @@ function layoutCard(post, assets, cardWidth) {
 
   // --- Measurement pass (font metrics only; independent of canvas size) ---
   const measure = measureCtx();
-  measure.font = `400 ${BODY_FONT_SIZE}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+  measure.font = font(400, TYPE.body);
   const bodyLines = wrapTokens(measure, tokenize(segmentText(record.text ?? "", record.facets)), contentWidth);
 
   let quoteLines = [];
   if (embed.quote?.record) {
-    measure.font = `400 24px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+    measure.font = font(400, TYPE.quoteBody);
     const quoteWidth = contentWidth - 32;
     const quoteText = embed.quote.record.value?.text ?? "";
     quoteLines = wrapTokens(measure, tokenize(segmentText(quoteText.slice(0, 280), [])), quoteWidth);
@@ -476,14 +524,14 @@ function layoutCard(post, assets, cardWidth) {
   } else if (embed.video) {
     mediaHeight = contentWidth * 0.62;
   } else if (embed.external) {
-    mediaHeight = 220;
+    mediaHeight = LINK_CARD_HEIGHT;
   }
 
   let quoteHeight = 0;
   if (embed.quote) {
     quoteHeight = embed.quote.restricted || embed.quote.unavailable
-      ? 68
-      : 24 + 40 + quoteLines.length * 30 + 20;
+      ? QUOTE_NOTICE_HEIGHT
+      : quoteBoxHeight(quoteLines.length);
   }
 
   const footerHeight = 34 + 20 + 40;
@@ -539,9 +587,9 @@ function layoutCard(post, assets, cardWidth) {
     ctx.restore();
 
     const nameX = cx + AVATAR_SIZE + 18;
-    const nameBaseline = cy + 30;
+    const nameBaseline = cy + NAME_BASELINE;
     ctx.textBaseline = "alphabetic";
-    ctx.font = `700 ${NAME_FONT_SIZE}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+    ctx.font = font(700, TYPE.name);
     ctx.fillStyle = TEXT_DARK;
     const name = author.displayName || author.handle || "unknown";
     ctx.fillText(name, nameX, nameBaseline);
@@ -551,14 +599,14 @@ function layoutCard(post, assets, cardWidth) {
         nameX,
         nameWidth: ctx.measureText(name).width,
         baseline: nameBaseline,
-        fontSize: NAME_FONT_SIZE,
+        fontSize: TYPE.name,
       });
       drawVerifiedBadge(ctx, badge.x, badge.y, badge.size);
     }
 
-    ctx.font = `400 24px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+    ctx.font = font(400, TYPE.handle);
     ctx.fillStyle = TEXT_GRAY;
-    ctx.fillText(`@${author.handle ?? "unknown"}`, nameX, cy + 58);
+    ctx.fillText(`@${author.handle ?? "unknown"}`, nameX, cy + HANDLE_BASELINE);
 
     const logoHeight = HEADER_LOGO_HEIGHT;
     drawBlueskyLogo(
@@ -572,8 +620,8 @@ function layoutCard(post, assets, cardWidth) {
     cy += headerHeight + 28;
 
     // --- Body text ---
-    ctx.font = `400 ${BODY_FONT_SIZE}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
-    drawLines(ctx, bodyLines, cx, cy + BODY_FONT_SIZE, BODY_LINE_HEIGHT, { text: TEXT_DARK, link: BRAND_BLUE });
+    ctx.font = font(400, TYPE.body);
+    drawLines(ctx, bodyLines, cx, cy + TYPE.body, BODY_LINE_HEIGHT, { text: TEXT_DARK, link: BRAND_BLUE });
     cy += textHeight;
 
     // --- Media ---
@@ -623,7 +671,7 @@ function layoutCard(post, assets, cardWidth) {
     cy += 32;
 
     // --- Footer: timestamp + divider + stats ---
-    ctx.font = `400 22px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+    ctx.font = font(400, TYPE.timestamp);
     ctx.fillStyle = TEXT_GRAY;
     ctx.fillText(formatTimestamp(record.createdAt ?? new Date().toISOString()), cx, cy + 22);
     cy += 34 + 14;
@@ -642,7 +690,7 @@ function layoutCard(post, assets, cardWidth) {
       { icon: "like", count: post.likeCount },
     ];
     let statX = cx;
-    ctx.font = `400 24px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+    ctx.font = font(400, TYPE.stats);
     for (const stat of stats) {
       drawIcon(ctx, stat.icon, statX + 12, cy, 24, TEXT_GRAY);
       ctx.fillStyle = TEXT_GRAY;
@@ -870,52 +918,62 @@ function drawExternalCard(ctx, external, x, y, w, h, thumb) {
   } catch {
     domain = external.uri ?? "";
   }
-  ctx.font = `400 20px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+  ctx.font = font(400, TYPE.linkDomain);
   ctx.fillStyle = TEXT_GRAY;
   ctx.fillText(domain, textX, y + 40);
 
-  ctx.font = `700 24px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+  ctx.font = font(700, TYPE.linkTitle);
   ctx.fillStyle = TEXT_DARK;
-  const titleLines = wrapTokens(ctx, tokenize(segmentText(external.title ?? "", [])), textW).slice(0, 2);
-  drawLines(ctx, titleLines, textX, y + 74, 30, { text: TEXT_DARK, link: TEXT_DARK });
+  const titleLines = wrapTokens(ctx, tokenize(segmentText(external.title ?? "", [])), textW).slice(
+    0,
+    LINK_TITLE_MAX_LINES,
+  );
+  drawLines(ctx, titleLines, textX, y + LINK_TITLE_BASELINE, LINK_TITLE_LINE_HEIGHT, {
+    text: TEXT_DARK,
+    link: TEXT_DARK,
+  });
 }
 
 function drawQuote(ctx, quote, x, y, w, lines) {
   if (quote.restricted) {
-    roundRectPath(ctx, x, y, w, 68, 16);
+    roundRectPath(ctx, x, y, w, QUOTE_NOTICE_HEIGHT, 16);
     ctx.strokeStyle = BORDER;
     ctx.stroke();
-    ctx.font = `italic 400 22px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+    ctx.font = font(400, TYPE.quoteNotice, "italic ");
     ctx.fillStyle = TEXT_GRAY;
-    ctx.fillText("Quoted post is hidden — its author restricts logged-out visibility", x + 20, y + 40);
-    return 68;
+    ctx.fillText(
+      "Quoted post is hidden — its author restricts logged-out visibility",
+      x + 20,
+      y + QUOTE_NOTICE_BASELINE,
+    );
+    return QUOTE_NOTICE_HEIGHT;
   }
   if (quote.unavailable) {
-    roundRectPath(ctx, x, y, w, 68, 16);
+    roundRectPath(ctx, x, y, w, QUOTE_NOTICE_HEIGHT, 16);
     ctx.strokeStyle = BORDER;
     ctx.stroke();
-    ctx.font = `italic 400 22px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+    ctx.font = font(400, TYPE.quoteNotice, "italic ");
     ctx.fillStyle = TEXT_GRAY;
-    ctx.fillText("Quoted post is unavailable", x + 20, y + 40);
-    return 68;
+    ctx.fillText("Quoted post is unavailable", x + 20, y + QUOTE_NOTICE_BASELINE);
+    return QUOTE_NOTICE_HEIGHT;
   }
 
-  const height = 24 + 40 + lines.length * 30 + 20;
+  const height = quoteBoxHeight(lines.length);
   roundRectPath(ctx, x, y, w, height, 16);
   ctx.strokeStyle = BORDER;
   ctx.lineWidth = 1.5;
   ctx.stroke();
 
   const rec = quote.record;
-  ctx.font = `700 22px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+  ctx.font = font(700, TYPE.quoteName);
   ctx.fillStyle = TEXT_DARK;
   ctx.fillText(rec.author?.displayName || rec.author?.handle || "unknown", x + 20, y + 32);
-  ctx.font = `400 20px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+  ctx.font = font(400, TYPE.quoteHandle);
   ctx.fillStyle = TEXT_GRAY;
   ctx.fillText(`@${rec.author?.handle ?? "unknown"}`, x + 20 + ctx.measureText(rec.author?.displayName || "").width + 12, y + 32);
 
-  ctx.font = `400 24px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
-  drawLines(ctx, lines, x + 20, y + 64, 30, { text: TEXT_DARK, link: BRAND_BLUE });
+  ctx.font = font(400, TYPE.quoteBody);
+  drawLines(ctx, lines, x + 20, y + 64, QUOTE_LINE_HEIGHT, { text: TEXT_DARK, link: BRAND_BLUE });
   return height;
 }
 

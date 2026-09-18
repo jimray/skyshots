@@ -11,6 +11,7 @@ import http from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { cacheControlFor } from "./cache-policy.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, "public");
@@ -28,6 +29,10 @@ const MIME_TYPES = {
   ".json": "application/json; charset=utf-8",
   ".svg": "image/svg+xml",
   ".ico": "image/x-icon",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
 };
 
 async function serveStatic(req, res) {
@@ -49,7 +54,7 @@ async function serveStatic(req, res) {
     const ext = path.extname(filePath);
     res.writeHead(200, {
       "content-type": MIME_TYPES[ext] || "application/octet-stream",
-      "cache-control": ext === ".html" ? "no-cache" : "public, max-age=3600",
+      "cache-control": cacheControlFor(ext),
     });
     res.end(body);
   } catch {

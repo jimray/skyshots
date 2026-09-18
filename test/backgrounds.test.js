@@ -42,13 +42,16 @@ function fakeContext() {
   };
 }
 
-test("the Bluesky blue gradient is the first option", () => {
-  assert.equal(BACKGROUND_PRESETS[0].id, "sky");
-  assert.equal(BACKGROUND_PRESETS[0].label, "Bluesky");
+test("the Bluesky blue gradient is still the first of the gradients", () => {
+  // The cloud images come first overall now; blue leads the gradients.
+  const firstGradient = BACKGROUND_PRESETS.find((p) => !p.src);
+  assert.equal(firstGradient.id, "sky");
+  assert.equal(firstGradient.label, "Bluesky");
 });
 
 test("no preset is a red gradient", () => {
   for (const preset of BACKGROUND_PRESETS) {
+    // Image presets carry no colour literals; their swatch is a url().
     for (const rgb of hexColors(preset.swatch)) {
       const { hue, saturation } = hueAndSaturation(rgb);
       const isRed = saturation > 0.35 && (hue >= 335 || hue <= 25);
@@ -57,8 +60,8 @@ test("no preset is a red gradient", () => {
   }
 });
 
-test("every preset paints a multi-stop gradient", () => {
-  for (const preset of BACKGROUND_PRESETS) {
+test("every gradient preset paints a multi-stop gradient", () => {
+  for (const preset of BACKGROUND_PRESETS.filter((p) => !p.src)) {
     const ctx = fakeContext();
     const result = preset.paint(ctx, 1200, 900);
     assert.equal(result.__gradient, true, `${preset.id} did not return a gradient`);

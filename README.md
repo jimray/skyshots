@@ -49,20 +49,91 @@ rather than by live data.
 - **No login required.** Everything is read through Bluesky's public,
   unauthenticated AppView (`public.api.bsky.app`), which already sends
   permissive CORS headers — the browser calls it directly.
+- **Type** is one table, `TYPE` in `render-card.js`: every size the card draws,
+  from the post body down to the domain on a link card. The line heights,
+  baselines and fixed box heights that have to move with them sit beside it,
+  and `test/typography.test.js` checks the text still fits what it is drawn
+  inside -- that the header band holds the name and handle, that a two-line
+  link title stays in its card, that no block sets its lines closer together
+  than the type is tall.
 - **Rendering is 100% Canvas 2D**, hand-drawn to look like a Bluesky post:
-  avatar, name/handle, rich text (mentions/links colored using the post's
+  avatar, name/handle, the blue verification check, rich text (mentions/links
+  colored using the post's
   real facets, with correct UTF-8 byte-offset handling), image grids,
   external link cards, video thumbnails with a play badge, quote-post cards
   (which get the same logged-out-visibility check), and a stats row using
-  Bluesky's own reply/repost/like icons.
-- **Backgrounds**: five built-in gradients (Bluesky blue first, and the
-  default), or upload your own image (used as a blurred backdrop behind the
-  card).
-- **Sizes**: every post renders at two sizes, each with its own download
-  button -- **Original**, which grows to fit the post, and **Square**
-  (1200x1200) for Instagram. The card is drawn once and fitted into each
-  frame, scaling down only when it is too tall to fit. Sizes are a data list
-  (`SIZE_PRESETS` in `render-card.js`), so another frame is one entry.
+  Bluesky's own reply/repost/like icons. A post with a single image gets its
+  true aspect ratio, however tall that is, so squarish and portrait images are
+  shown whole rather than cropped into a landscape box; multi-image grids stay
+  fixed-height cropped tiles, as they are in the Bluesky app.
+- **Verification**: a verified account gets the app's blue check after its
+  display name. The post view already carries `author.verification`, so this
+  costs no extra request. Only the account's own `verifiedStatus` earns the
+  check; `trustedVerifierStatus`, which marks an account that verifies others,
+  gets a differently shaped badge in the app that this tool does not draw, so a
+  verifier that is not itself verified (bsky.app, for one) shows no badge.
+  `verificationBadgeFor` in `atproto.js` decides; `verified-badge.js` draws.
+
+- **Backgrounds**: chosen per post -- each result carries its own picker, so
+  several posts in one batch can take different backgrounds. Two cloud
+  photographs (light is the default, dark second) and five gradients, or upload
+  your own image. Uploads are blurred and dimmed
+  so the card stays readable; the built-in cloud images are not, since they are
+  designed as backdrops. Both cloud images are composed as a band of cloud
+  under a nearly flat sky, so they are scaled to the frame width with the
+  bottom edge pinned and the space above filled with a sky colour sampled from
+  the image itself (`backgroundImageLayout` in `render-card.js`). That fits any
+  aspect ratio with no cropping or distortion.
+- **The post URL** is shown as a link to the post, with a one-click Copy
+  button. Copy always yields the canonical
+  `https://bsky.app/profile/<handle>/post/<rkey>`, built from the resolved post
+  rather than echoed from the input, so an `at://` URI comes back as something
+  shareable. An unresolvable handle falls back to the DID, which still resolves
+  on bsky.app.
+- **Sizes**: a rail down the left of each preview switches output size --
+  **16:9** (1920x1080), **Original** (1200 wide, grows to fit the post), and
+  **Square** (1200x1200) for Instagram. The card is drawn at its natural size
+  and fitted into the chosen frame: it is scaled until it touches the padding
+  on whichever axis runs out first, then centered. Sizes are a data list
+  (`SIZE_PRESETS` in `render-card.js`), so another frame is one entry, and the
+  first entry is the default a result opens on.
+
+  16:9 is 1920x1080 rather than 1200x675 because a 675-tall frame leaves only
+  531px of padded height, which would shrink almost every card.
+
+  Fitting scales up as well as down, which matters only for 16:9. The square's
+  padded width is exactly the card width, so there a card is never enlarged and
+  one that fits is left at 1:1. The 16:9 frame is much wider than the card, so
+  a card up to 557 tall -- most posts -- grows to fill the padded width rather
+  than floating in the middle of the frame. Taller cards are limited by the
+  1080px height instead, and a portrait card still leaves side margins; that is
+  what 16:9 does to a tall card.
+
+  Square squares the card itself, not just the frame around it, and it does so
+  by narrowing the card rather than by padding it. A card gets taller as it
+  narrows -- the header and footer are a fixed cost, the body takes more lines
+  -- so `squarestCardWidth` binary-searches between 640px and the full 1056px
+  for the width whose measured height comes closest to that width. Most posts
+  come out square on their own, with no padding at all. The card is then scaled
+  up to fill the frame, so a narrow card means larger text in the output, not
+  smaller.
+
+  The two ends of that search are answers in their own right. A post already
+  taller than the card is wide has nothing to gain from narrowing and keeps the
+  full width. A post too short to reach a square even at 640 stops there, and
+  `cardBox` pads what is left over, split evenly above and below so the post
+  sits in the middle. Nothing is ever cropped or shrunk to force a square.
+
+  Solving this means the same post is laid out at a dozen widths, so measuring
+  had to come out of `preparePostCard`: it now loads the images and returns
+  `layoutAt(cardWidth)`, with layouts cached per width. Loading is still done
+  once per post, so switching size or background still touches no network.
+
+  Rendering is split three ways so switching is cheap: `preparePostCard` loads
+  the post's images and measures the layout, `resolveBackground` loads the
+  background, and `drawPreparedCard` is a synchronous draw. Both halves are
+  cached per result, so changing size touches no network at all and changing
+  background reloads only the background.
 - **Zoom**: clicking (or tabbing to and pressing Enter on) a preview opens it
   enlarged and centered, with its size, dimensions and a download button. It
   is a native `<dialog>` opened with `showModal()`, so Esc, the focus trap and
@@ -103,9 +174,24 @@ background, and click **Generate screenshots**. Each result gets its own
 ## Testing notes
 
 `npm test` runs the unit tests (`node --test`, no dependencies): background
-preset order and hues, the size-fitting geometry, icon/logo placement,
-download filenames, and the opt-out logic (with `fetch` stubbed: record
-present/absent/unreadable, DID deduplication, and which signal wins). Canvas is absent in Node, so the icon tests stub `Path2D`
+preset order and hues, the size-fitting and background-image geometry,
+icon/logo placement, download filenames, canonical post URLs, and the opt-out
+logic (with `fetch` stubbed: record present/absent/unreadable, DID
+deduplication, and which signal wins).
+
+`parsePostReference` -- the input parser -- has no tests yet, which is the
+largest untested piece of logic left.
+
+## A note on caching
+
+There is no build step and so no content-hashed filenames. index.html and the
+modules have to move together -- the HTML says which elements exist and
+main.js reaches for them while loading -- so code and markup are always served
+`no-cache`, and only images are allowed to sit in the browser cache. Getting
+this wrong once produced a page that silently did nothing: a cached old
+main.js threw on an element the new HTML no longer had, so its submit listener
+was never attached and the form fell through to a native GET. See
+`cache-policy.js`. Canvas is absent in Node, so the icon tests stub `Path2D`
 and record the context calls.
 
 The zoom overlay has no unit test: its behaviour is `<dialog>` and CSS, which

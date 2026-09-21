@@ -89,3 +89,17 @@ test("the logo is drawn from its top-left corner at the requested height", () =>
   assert.deepEqual(ctx.calls.find((c) => c[0] === "scale"), ["scale", 1, 1]);
   assert.equal(blueskyLogoWidth(501), 568);
 });
+
+const { HEADER_LOGO_HEIGHT, HEADER_HEIGHT } = await import("../public/js/render-card.js");
+
+test("the butterfly in the card header is drawn at 40px", () => {
+  // Bumped from 30: the mark was too quiet against a 28px display name.
+  assert.equal(HEADER_LOGO_HEIGHT, 40);
+});
+
+test("the butterfly still fits inside the header band it is centered in", () => {
+  assert.ok(
+    HEADER_LOGO_HEIGHT <= HEADER_HEIGHT,
+    `a ${HEADER_LOGO_HEIGHT}px logo would overflow the ${HEADER_HEIGHT}px header`,
+  );
+});

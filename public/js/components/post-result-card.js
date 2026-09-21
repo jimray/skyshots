@@ -1,12 +1,25 @@
-import { BACKGROUND_PRESETS, SIZE_PRESETS, renderPostCardSizes } from "../render-card.js";
+import {
+  BACKGROUND_PRESETS,
+  SIZE_PRESETS,
+  preparePostCard,
+  resolveBackground,
+  drawPreparedCard,
+} from "../render-card.js";
 import { downloadCanvas, screenshotFilename } from "../download-canvas.js";
+import { postUrl } from "../atproto.js";
 import { openImageZoom } from "./image-zoom.js";
+import "./background-picker.js";
 
 /**
  * <post-result-card> owns the lifecycle for a single input line: shows a
- * loading state, then either one rendered screenshot per SIZE_PRESETS entry --
- * each separately downloadable, and clickable to zoom -- or an error
- * explanation (parse failure or post not found).
+ * loading state, then either the rendered screenshot -- with buttons to switch
+ * output size, downloadable, and clickable to zoom -- or an error explanation
+ * (parse failure or post not found).
+ *
+ * Each card carries its own background picker, so a background is chosen per
+ * post. The post and the background are prepared once and cached, so switching
+ * size is a redraw with no network, and switching background reloads only the
+ * background.
  *
  * When the author has asked not to be shown, the previews are still rendered
  * but sit behind a dismissible cover, and downloading and zooming stay off
@@ -24,6 +37,10 @@ export class PostResultCard extends HTMLElement {
   #restriction = null;
   #coverDismissed = false;
   #drawn = false;
+  #sizeId = SIZE_PRESETS[0].id;
+  #copyResetTimer = null;
+  #prepared = null;
+  #background = null;
   #message = "";
   #sourceLine = "";
 
@@ -44,12 +61,6 @@ export class PostResultCard extends HTMLElement {
     this.render();
   }
 
-  /** Sets the background to use for the next draw without triggering a redraw itself. */
-  primeBackground(backgroundId, customBackgroundImage) {
-    this.#backgroundId = backgroundId;
-    this.#customBackgroundImage = customBackgroundImage;
-  }
-
   /**
    * @param {string} sourceLine
    * @param {object} post
@@ -62,7 +73,20 @@ export class PostResultCard extends HTMLElement {
     this.#restriction = restriction;
     this.#coverDismissed = false;
     this.#drawn = false;
+    this.#prepared = null;
+    this.#background = null;
+    this.#sizeId = SIZE_PRESETS[0].id;
     this.render();
+    await this.#draw();
+  }
+
+  /** Switches output size. Redraws from the cache; touches no network. */
+  async #setSize(sizeId) {
+    if (sizeId === this.#sizeId) return;
+    this.#sizeId = sizeId;
+    for (const btn of this.querySelectorAll(".size-tab")) {
+      btn.setAttribute("aria-pressed", String(btn.dataset.sizeId === sizeId));
+    }
     await this.#draw();
   }
 
@@ -92,65 +116,81 @@ export class PostResultCard extends HTMLElement {
   async setBackground(backgroundId, customBackgroundImage) {
     this.#backgroundId = backgroundId;
     this.#customBackgroundImage = customBackgroundImage;
+    this.#background = null; // Resolve the new one on the next draw.
     if (this.#status === "ready") await this.#draw();
   }
 
-  /** Every size's canvas, keyed by size id, as renderPostCardSizes expects. */
-  #canvases() {
-    return Object.fromEntries(
-      SIZE_PRESETS.map((size) => [size.id, this.querySelector(`canvas[data-size-id="${size.id}"]`)]),
-    );
-  }
-
   async #draw() {
-    const canvases = this.#canvases();
-    if (!this.#post || Object.values(canvases).some((c) => !c)) return;
+    const canvas = this.querySelector("canvas");
+    if (!canvas || !this.#post) return;
 
-    const wrappers = [...this.querySelectorAll(".canvas-wrap")];
-    wrappers.forEach((w) => w.classList.add("is-drawing"));
+    const wrapper = this.querySelector(".canvas-wrap");
+    wrapper.classList.add("is-drawing");
     try {
-      await renderPostCardSizes(canvases, {
-        post: this.#post,
+      // Each half is cached independently: a size switch reuses both, a
+      // background switch reuses the prepared post.
+      this.#prepared ??= await preparePostCard({ post: this.#post });
+      this.#background ??= await resolveBackground({
         backgroundId: this.#backgroundId,
         customBackgroundImage: this.#customBackgroundImage,
       });
-      for (const canvas of Object.values(canvases)) {
-        const option = canvas.closest(".size-option");
-        const size = SIZE_PRESETS.find((s) => s.id === canvas.dataset.sizeId);
-        option.querySelector(".size-option__dims").textContent = `${canvas.width} x ${canvas.height}`;
-        // The dimensions are only known once it is drawn.
-        option.querySelector(".canvas-wrap").setAttribute(
-          "aria-label",
-          `Zoom the ${size?.label ?? canvas.dataset.sizeId} screenshot, ${canvas.width} by ${canvas.height}`,
-        );
-      }
+
+      drawPreparedCard(canvas, this.#prepared, this.#background, this.#sizeId);
+
+      const label = SIZE_PRESETS.find((s) => s.id === this.#sizeId)?.label ?? this.#sizeId;
+      this.querySelector(".size-option__dims").textContent = `${canvas.width} x ${canvas.height}`;
+      wrapper.setAttribute("aria-label", `Zoom the ${label} screenshot, ${canvas.width} by ${canvas.height}`);
+
       this.#drawn = true;
       this.#syncControls();
     } catch (err) {
       this.setError(this.#sourceLine, `Couldn't render this post: ${err.message}`);
       return;
     } finally {
-      wrappers.forEach((w) => w.classList.remove("is-drawing"));
+      wrapper.classList.remove("is-drawing");
     }
   }
 
-  #filename(sizeId) {
-    return screenshotFilename(this.#post?.author?.handle, sizeId, Date.now());
+  async #copyUrl() {
+    const url = postUrl(this.#post);
+    if (!url) return;
+    const btn = this.querySelector(".copy-btn");
+    const status = this.querySelector(".post-url [role='status']");
+    try {
+      await writeToClipboard(url);
+      btn.textContent = "Copied";
+      btn.classList.add("is-copied");
+      // The button's own label change is not reliably announced, so say it here.
+      status.textContent = `Copied ${url} to the clipboard`;
+    } catch {
+      btn.textContent = "Copy failed";
+      status.textContent = "Could not copy the URL to the clipboard";
+    }
+    clearTimeout(this.#copyResetTimer);
+    this.#copyResetTimer = setTimeout(() => {
+      btn.textContent = "Copy";
+      btn.classList.remove("is-copied");
+      status.textContent = "";
+    }, 1600);
   }
 
-  #download(sizeId) {
+  #filename() {
+    return screenshotFilename(this.#post?.author?.handle, this.#sizeId, Date.now());
+  }
+
+  #download() {
     // The buttons are disabled while covered; this is the backstop.
     if (this.#covered) return;
-    const canvas = this.querySelector(`canvas[data-size-id="${sizeId}"]`);
-    if (canvas) downloadCanvas(canvas, this.#filename(sizeId));
+    const canvas = this.querySelector("canvas");
+    if (canvas) downloadCanvas(canvas, this.#filename());
   }
 
-  #zoom(sizeId) {
+  #zoom() {
     if (this.#covered) return;
-    const canvas = this.querySelector(`canvas[data-size-id="${sizeId}"]`);
+    const canvas = this.querySelector("canvas");
     if (!canvas) return;
-    const label = SIZE_PRESETS.find((s) => s.id === sizeId)?.label ?? sizeId;
-    openImageZoom({ canvas, label, filename: this.#filename(sizeId) });
+    const label = SIZE_PRESETS.find((s) => s.id === this.#sizeId)?.label ?? this.#sizeId;
+    openImageZoom({ canvas, label, filename: this.#filename() });
   }
 
   render() {
@@ -173,26 +213,16 @@ export class PostResultCard extends HTMLElement {
     }
 
     // ready
-    const options = SIZE_PRESETS.map(
+    const url = postUrl(this.#post);
+
+    const tabs = SIZE_PRESETS.map(
       (size) => `
-        <figure class="size-option">
-          <button
-            type="button"
-            class="canvas-wrap"
-            data-size-id="${size.id}"
-            aria-label="Zoom the ${escapeHtml(size.label)} screenshot"
-            disabled
-          >
-            <canvas data-size-id="${size.id}"></canvas>
-          </button>
-          <figcaption class="size-option__caption">
-            <span class="size-option__label">${escapeHtml(size.label)}</span>
-            <span class="size-option__dims"></span>
-          </figcaption>
-          <button type="button" class="download-btn" data-size-id="${size.id}" disabled>
-            Download PNG
-          </button>
-        </figure>`,
+        <button
+          type="button"
+          class="size-tab"
+          data-size-id="${size.id}"
+          aria-pressed="${size.id === this.#sizeId}"
+        >${escapeHtml(size.label)}</button>`,
     ).join("");
 
     const cover = this.#covered
@@ -203,24 +233,76 @@ export class PostResultCard extends HTMLElement {
         </div>`
       : "";
 
+    // With no canonical URL to build there is nothing to link or copy, so fall
+    // back to showing the line as it was typed.
+    const header = url
+      ? `
+        <div class="post-url">
+          <a class="post-url__link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer"
+            >${escapeHtml(url.replace(/^https:\/\//, ""))}</a>
+          <button type="button" class="copy-btn" aria-label="Copy the post URL">Copy</button>
+          <span class="visually-hidden" role="status" aria-live="polite"></span>
+        </div>`
+      : `<p class="source-line">${escapeHtml(this.#sourceLine)}</p>`;
+
     this.innerHTML = `
       <div class="result-card result-card--ready">
-        <p class="source-line">${escapeHtml(this.#sourceLine)}</p>
-        <div class="covered-area">
-          <div class="size-grid">${options}</div>
-          ${cover}
+        ${header}
+        <background-picker class="card-bg-picker"></background-picker>
+        <div class="preview-row">
+          <div class="size-tabs" role="group" aria-label="Output size">${tabs}</div>
+          <div class="preview-col">
+            <div class="covered-area">
+              <figure class="size-option">
+                <button type="button" class="canvas-wrap" disabled>
+                  <canvas></canvas>
+                </button>
+                <figcaption class="size-option__caption">
+                  <span class="size-option__dims"></span>
+                </figcaption>
+              </figure>
+              ${cover}
+            </div>
+          </div>
         </div>
+        <button type="button" class="download-btn" disabled>Download PNG</button>
       </div>`;
 
+    this.querySelectorAll(".size-tab").forEach((btn) => {
+      btn.addEventListener("click", () => this.#setSize(btn.dataset.sizeId));
+    });
+    this.querySelector(".download-btn").addEventListener("click", () => this.#download());
+    this.querySelector(".canvas-wrap").addEventListener("click", () => this.#zoom());
+    this.querySelector(".copy-btn")?.addEventListener("click", () => this.#copyUrl());
+    this.querySelector("background-picker").addEventListener("bg-change", (e) => {
+      e.stopPropagation();
+      this.setBackground(e.detail.backgroundId, e.detail.customBackgroundImage);
+    });
     this.querySelector(".content-cover__dismiss")?.addEventListener("click", () => this.#dismissCover());
+  }
+}
 
-    this.querySelectorAll(".download-btn").forEach((btn) => {
-      btn.addEventListener("click", () => this.#download(btn.dataset.sizeId));
-    });
-
-    this.querySelectorAll(".canvas-wrap").forEach((btn) => {
-      btn.addEventListener("click", () => this.#zoom(btn.dataset.sizeId));
-    });
+/**
+ * Copies text, preferring the async clipboard API and falling back to a
+ * throwaway textarea where that is unavailable (a page served over plain HTTP
+ * from anything other than localhost).
+ */
+async function writeToClipboard(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const scratch = document.createElement("textarea");
+  scratch.value = text;
+  scratch.setAttribute("readonly", "");
+  scratch.style.position = "fixed";
+  scratch.style.opacity = "0";
+  document.body.append(scratch);
+  scratch.select();
+  try {
+    if (!document.execCommand("copy")) throw new Error("copy rejected");
+  } finally {
+    scratch.remove();
   }
 }
 

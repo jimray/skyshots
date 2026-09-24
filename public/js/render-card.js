@@ -2,6 +2,7 @@ import { proxiedImageUrl, verificationBadgeFor } from "./atproto.js";
 import { drawVerifiedBadge, badgePlacement } from "./verified-badge.js";
 import { drawBlueskyLogo, blueskyLogoWidth } from "./bluesky-logo.js";
 import { drawIcon } from "./bsky-icons.js";
+import { smartenSegments } from "./smart-quotes.js";
 
 const BRAND_BLUE = "#1185fe";
 const TEXT_DARK = "#0f1419";
@@ -14,8 +15,9 @@ export const BACKGROUND_PRESETS = [
     label: "Clouds",
     swatch: "url(/img/clouds-light.png) center/cover",
     src: "/img/clouds-light.png",
-    // Sampled from the image's own top row. If the file is replaced, re-sample:
-    // this is what fills the frame above the clouds.
+    // Only a fallback for when the image fails to load: the sky above the
+    // clouds is normally the image's own top row, stretched up (see
+    // skyStripLayout), which needs no sampling and leaves no seam.
     sky: "#b7ddf2",
   },
   {
@@ -87,6 +89,18 @@ export const CANVAS_WIDTH = 1200;
 export const OUTER_PAD = 72;
 const CARD_PAD = 48;
 export const CARD_WIDTH = CANVAS_WIDTH - OUTER_PAD * 2;
+
+/**
+ * The width the Original size lays its card out at, before the frame scales it
+ * back up to CARD_WIDTH.
+ *
+ * Original used to draw at 1:1, which left it the only size whose type was its
+ * literal size -- noticeably smaller on screen than Square or 9:16, both of
+ * which lay out narrow and are enlarged to fit their frame. Laying out at 812
+ * and scaling by 1.3 puts its body text at about 43px, where the other two
+ * sit, without a second set of type sizes to keep in step.
+ */
+export const ORIGINAL_CARD_WIDTH = 812;
 
 /**
  * The narrowest a card may be laid out at while chasing a square.
@@ -199,11 +213,13 @@ export const BODY_LINE_HEIGHT = TYPE.body * 1.42;
  * unknown size id falls back to.
  */
 export const SIZE_PRESETS = [
-  // 1920x1080 rather than 1200x675: a 675-tall frame leaves only 531px of
-  // padded height, which would shrink almost every card. At 1080 a card up to
-  // 557 tall grows to fill the padded width instead.
-  { id: "wide", label: "16:9", width: 1920, height: 1080 },
-  { id: "original", label: "Original" },
+  // The portrait frame stories and reels are cut to. Nothing is as tall as
+  // 9:16, so the card is squared (`squareCard`) and left floating in the
+  // middle of a long background, rather than stretched at it. Squaring also
+  // narrows the card, and the frame then enlarges it to fit, so the text comes
+  // out bigger here than at any other size.
+  { id: "tall", label: "9:16", width: 1080, height: 1920, squareCard: true },
+  { id: "original", label: "Original", cardWidth: ORIGINAL_CARD_WIDTH },
   // `squareCard` squares the card, not just the frame it sits in: see cardBox.
   { id: "square", label: "Square", width: 1200, height: 1200, squareCard: true },
 ];
@@ -213,8 +229,9 @@ export const SIZE_PRESETS = [
  * content starts.
  *
  * Normally the card is exactly as tall as its content. A preset marked
- * `squareCard` pads it out to a square, splitting what it gains evenly above
- * and below so the post sits in the middle rather than hanging from the top.
+ * `squareCard` -- Square and 9:16 both -- pads it out to a square, splitting
+ * what it gains evenly above and below so the post sits in the middle rather
+ * than hanging from the top.
  *
  * By the time a square card reaches here it has usually been laid out at the
  * width that makes it nearly square already (`squarestCardWidth`), so there is
@@ -244,9 +261,9 @@ export function cardBox(naturalHeight, size, cardWidth = CARD_WIDTH) {
  * A fixed-size frame scales the card until it touches the padding on whichever
  * axis runs out first, then centers it. The square's padded width is exactly
  * CARD_WIDTH, so there a card is only ever scaled down, and one that fits is
- * left at 1:1 at the same x as "original". The 16:9 frame is much wider than
- * the card, so there a short card is scaled up to fill the frame instead of
- * floating in the middle of it.
+ * left at 1:1 at the same x as "original". The 9:16 frame is narrower than the
+ * card, so there every card is scaled down to the frame's width and centered
+ * in the height that is left over.
  *
  * @param {number} cardHeight  Natural height of the card, in pixels.
  * @param {object} size        A SIZE_PRESETS entry.
@@ -258,14 +275,15 @@ export function cardBox(naturalHeight, size, cardWidth = CARD_WIDTH) {
  *
  * Both cloud images are composed as a band of cloud along the bottom under an
  * almost flat sky, so pinning the bottom keeps the composition and the space
- * left above can simply be filled with the sky colour -- no cropping
+ * left above can be filled by extending the image's top row -- no cropping
  * sideways, no distortion, at any aspect ratio.
  *
  * When the image is proportionally taller than the frame it overflows off the
  * top instead, and there is no sky left to fill.
  *
  * @returns {{x: number, y: number, width: number, height: number, skyHeight: number}}
- *   `skyHeight` is the band at the top of the frame the image does not reach.
+ *   `skyHeight` is the band at the top of the frame the image does not reach;
+ *   `skyStripLayout` says how to fill it.
  */
 export function backgroundImageLayout(imgWidth, imgHeight, canvasWidth, canvasHeight) {
   const height = imgHeight * (canvasWidth / imgWidth);
@@ -273,12 +291,42 @@ export function backgroundImageLayout(imgWidth, imgHeight, canvasWidth, canvasHe
   return { x: 0, y, width: canvasWidth, height, skyHeight: Math.max(0, y) };
 }
 
+/**
+ * How to fill the band of sky above the image: by stretching the image's own
+ * top row up to the top of the frame.
+ *
+ * Filling it with one colour leaves a seam. A cloud photograph's top row is
+ * not one colour -- clouds-light runs from rgb(196,227,245) on the left to
+ * rgb(171,216,240) on the right -- so a single fill can only match in the
+ * middle of the frame, and is out by a dozen values at the edges. Repeating
+ * the row instead gives every column its own colour, and the join matches
+ * exactly whatever image is dropped in.
+ *
+ * The strip is placed at the image's own x and width, so the two are scaled
+ * across identically and the columns line up.
+ *
+ * @returns {{source: object, dest: object}|null} null when the image already
+ *   covers the frame and there is no sky to fill.
+ */
+export function skyStripLayout(imgWidth, imgHeight, canvasWidth, canvasHeight) {
+  const l = backgroundImageLayout(imgWidth, imgHeight, canvasWidth, canvasHeight);
+  if (l.skyHeight <= 0) return null;
+  return {
+    source: { x: 0, y: 0, width: imgWidth, height: 1 },
+    dest: { x: l.x, y: 0, width: l.width, height: l.skyHeight },
+  };
+}
+
 export function fitCardTransform(cardHeight, size, cardWidth = CARD_WIDTH) {
   if (!size?.width || !size?.height) {
+    // A size with no frame grows to fit its post. The card is scaled to the
+    // full CARD_WIDTH, so the output is always CANVAS_WIDTH across however
+    // narrow the card was laid out.
+    const scale = CARD_WIDTH / cardWidth;
     return {
-      width: Math.round(cardWidth + OUTER_PAD * 2),
-      height: Math.round(cardHeight + OUTER_PAD * 2),
-      scale: 1,
+      width: CANVAS_WIDTH,
+      height: Math.round(cardHeight * scale + OUTER_PAD * 2),
+      scale,
       x: OUTER_PAD,
       y: OUTER_PAD,
     };
@@ -335,8 +383,16 @@ function drawImageCover(ctx, img, x, y, w, h) {
 
 // Splits post text into {text, link} segments using the record's byte-offset
 // facets, so mentions/links can be colored the way Bluesky renders them.
+/**
+ * Splits post text into runs of prose and runs covered by a facet, and
+ * smartens the quotes in the prose (see `smart-quotes.js`).
+ *
+ * Smartening happens here, after the byte offsets have been resolved, because
+ * a curly quote is three bytes where a straight one is one: doing it any
+ * earlier would move every facet in the post.
+ */
 function segmentText(text, facets) {
-  if (!facets?.length) return [{ text, link: false }];
+  if (!facets?.length) return smartenSegments([{ text, link: false }]);
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   const bytes = encoder.encode(text);
@@ -354,7 +410,7 @@ function segmentText(text, facets) {
     cursor = byteEnd;
   }
   if (cursor < bytes.length) segments.push({ text: decoder.decode(bytes.slice(cursor)), link: false });
-  return segments;
+  return smartenSegments(segments);
 }
 
 function tokenize(segments) {
@@ -744,12 +800,18 @@ export async function resolveBackground({ backgroundId, customBackgroundImage })
     const img = await loadBackgroundImage(preset.src);
     return {
       paint(ctx, width, height) {
-        // The sky goes down first, so the band above the clouds is covered
-        // even if the image is missing.
+        // The flat sky goes down first, so the band above the clouds is
+        // covered even if the image is missing entirely.
         ctx.fillStyle = preset.sky;
         ctx.fillRect(0, 0, width, height);
         if (!img) return;
+
         const l = backgroundImageLayout(img.naturalWidth, img.naturalHeight, width, height);
+        const strip = skyStripLayout(img.naturalWidth, img.naturalHeight, width, height);
+        if (strip) {
+          const { source: sr, dest: d } = strip;
+          ctx.drawImage(img, sr.x, sr.y, sr.width, sr.height, d.x, d.y, d.width, d.height);
+        }
         ctx.drawImage(img, l.x, l.y, l.width, l.height);
       },
     };
@@ -766,15 +828,15 @@ export async function resolveBackground({ backgroundId, customBackgroundImage })
 /**
  * Lays a prepared post out for one size.
  *
- * Every size but the square one uses the full card width. The square size
- * narrows the card until the post fills it, which is what keeps a short post
- * from becoming a small block of text stranded in a large white square.
+ * Original uses the full card width. The sizes that square their card -- Square
+ * and 9:16 -- narrow it until the post fills it, which is what keeps a short
+ * post from becoming a small block of text stranded in a large white square.
  *
  * @param {object} prepared  From preparePostCard.
  * @param {object} size      A SIZE_PRESETS entry.
  */
 export function layoutForSize(prepared, size) {
-  if (!size?.squareCard) return prepared.layoutAt(CARD_WIDTH);
+  if (!size?.squareCard) return prepared.layoutAt(size?.cardWidth ?? CARD_WIDTH);
   const width = squarestCardWidth((w) => prepared.layoutAt(w).cardHeight, {
     min: MIN_SQUARE_CARD_WIDTH,
     max: CARD_WIDTH,

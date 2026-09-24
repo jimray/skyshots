@@ -100,12 +100,13 @@ function fakePrepared(heightAt) {
 
 const square = SIZE_PRESETS.find((s) => s.id === "square");
 
-test("every size but the square one is laid out at the full card width", () => {
+test("a size that does not square its card is laid out at the one width it asks for", () => {
   for (const size of SIZE_PRESETS.filter((s) => !s.squareCard)) {
     const prepared = fakePrepared(() => 560);
     const layout = layoutForSize(prepared, size);
-    assert.equal(layout.cardWidth, CARD_WIDTH, `${size.id} should use the full width`);
-    assert.deepEqual(prepared.asked, [CARD_WIDTH], `${size.id} should not go looking for another width`);
+    const expected = size.cardWidth ?? CARD_WIDTH;
+    assert.equal(layout.cardWidth, expected, `${size.id} should use its own width`);
+    assert.deepEqual(prepared.asked, [expected], `${size.id} should not go looking for another width`);
   }
 });
 

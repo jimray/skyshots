@@ -49,6 +49,28 @@ rather than by live data.
 - **No login required.** Everything is read through Bluesky's public,
   unauthenticated AppView (`public.api.bsky.app`), which already sends
   permissive CORS headers — the browser calls it directly.
+- **Punctuation is smartened** in everything the card draws as prose -- the
+  post body, a quoted post's text, a link card's title. Straight quotes become
+  curly, `--` becomes an em dash, `---` an en dash, `...` an ellipsis. The
+  rules are SmartyPants', vendored at `public/js/vendor/smartypants.js`
+  (BSD-3-Clause, licence beside it): this app has no build step and no
+  dependencies, so the module is copied in and served as it is, and the header
+  on the file says how to update it.
+
+  `smart-quotes.js` is the wrapper, and exists because SmartyPants was written
+  for HTML and a post is plain text. Two things follow. It skips the contents
+  of `pre`, `code`, `kbd`, `script` and `math` tags, so a post that merely
+  mentions `<code>` would otherwise lose its smartening from that word on --
+  every `<` is hidden behind a control character for the duration of the call.
+  And it reads the characters either side of a mark to tell an opening quote
+  from a closing one, so text handed to it in isolation always reads as the
+  start of a sentence -- a stand-in character is prefixed to give it the
+  context, then sliced back off.
+
+  Text inside a link, mention or hashtag is left exactly as the record has it:
+  those are addresses, where a dash is a dash and a dot is a dot. The pass also
+  runs after facets have been resolved to byte offsets, since every mark it
+  makes is a different length in bytes than what it replaces.
 - **Type** is one table, `TYPE` in `render-card.js`: every size the card draws,
   from the post body down to the domain on a link card. The line heights,
   baselines and fixed box heights that have to move with them sit beside it,
@@ -81,9 +103,17 @@ rather than by live data.
   so the card stays readable; the built-in cloud images are not, since they are
   designed as backdrops. Both cloud images are composed as a band of cloud
   under a nearly flat sky, so they are scaled to the frame width with the
-  bottom edge pinned and the space above filled with a sky colour sampled from
-  the image itself (`backgroundImageLayout` in `render-card.js`). That fits any
-  aspect ratio with no cropping or distortion.
+  bottom edge pinned and the space above filled by stretching the image's own
+  top row upward (`backgroundImageLayout` and `skyStripLayout` in
+  `render-card.js`). That fits any aspect ratio with no cropping or distortion.
+
+  The top row rather than a sampled colour, because a cloud photograph's top
+  row is not one colour: clouds-light runs from rgb(196,227,245) on the left to
+  rgb(171,216,240) on the right, so any single fill matches in the middle of
+  the frame and is out by a dozen values at the edges, which shows as a seam.
+  Repeating the row gives every column its own colour and the join matches by
+  construction, whatever image is dropped in. Each preset still carries a flat
+  `sky` colour, used only if the image fails to load.
 - **The post URL** is shown as a link to the post, with a one-click Copy
   button. Copy always yields the canonical
   `https://bsky.app/profile/<handle>/post/<rkey>`, built from the resolved post
@@ -91,25 +121,33 @@ rather than by live data.
   shareable. An unresolvable handle falls back to the DID, which still resolves
   on bsky.app.
 - **Sizes**: a rail down the left of each preview switches output size --
-  **16:9** (1920x1080), **Original** (1200 wide, grows to fit the post), and
-  **Square** (1200x1200) for Instagram. The card is drawn at its natural size
-  and fitted into the chosen frame: it is scaled until it touches the padding
-  on whichever axis runs out first, then centered. Sizes are a data list
-  (`SIZE_PRESETS` in `render-card.js`), so another frame is one entry, and the
-  first entry is the default a result opens on.
+  **9:16** (1080x1920) for stories and reels, **Original** (1200 wide, grows to
+  fit the post), and **Square** (1200x1200) for Instagram. The card is drawn at
+  its natural size and fitted into the chosen frame: it is scaled until it
+  touches the padding on whichever axis runs out first, then centered. Sizes
+  are a data list (`SIZE_PRESETS` in `render-card.js`), so another frame is one
+  entry, and the first entry is the default a result opens on.
 
-  16:9 is 1920x1080 rather than 1200x675 because a 675-tall frame leaves only
-  531px of padded height, which would shrink almost every card.
+  Every size lays its card out narrower than it draws it, so the type comes out
+  the same size in all three. Original lays out at 812px and is scaled 1.3x to
+  the full 1200px width; Square and 9:16 narrow their card until the post fills
+  a square and their frames enlarge it. Before that, Original was the only size
+  drawn at 1:1, and its text looked small beside the others.
 
-  Fitting scales up as well as down, which matters only for 16:9. The square's
-  padded width is exactly the card width, so there a card is never enlarged and
-  one that fits is left at 1:1. The 16:9 frame is much wider than the card, so
-  a card up to 557 tall -- most posts -- grows to fill the padded width rather
-  than floating in the middle of the frame. Taller cards are limited by the
-  1080px height instead, and a portrait card still leaves side margins; that is
-  what 16:9 does to a tall card.
+  9:16 squares its card as well, and only the frame around it stays long. No
+  post is ever as tall as 9:16, so rather than stretch the card at a shape it
+  cannot reach, the post is squared and left floating in the middle of a long
+  background. Squaring narrows the card, and the frame -- 936px of padded width
+  -- then enlarges it to fit, so the text comes out bigger in 9:16 than in any
+  other size. The background above and below is the cloud image, which is built
+  for it: the cloud band on the bottom edge, its own top row extended upward.
 
-  Square squares the card itself, not just the frame around it, and it does so
+  Fitting scales up as well as down. The square's padded width is exactly the
+  card width, so there a card is never enlarged and one that fits is left at
+  1:1; a preset wider than the card would enlarge a short card to fill it
+  rather than leaving it adrift in the middle.
+
+  Square and 9:16 square the card itself, not just the frame around it, and do so
   by narrowing the card rather than by padding it. A card gets taller as it
   narrows -- the header and footer are a fixed cost, the body takes more lines
   -- so `squarestCardWidth` binary-searches between 640px and the full 1056px
